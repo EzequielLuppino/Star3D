@@ -1,0 +1,21 @@
+; GPU self-test shader (gx_init.c gx_hwtest, S3D_GPU_SELFTEST, bug 12).
+; Inputs follow GxOutVertex: v0 pos, v1 color (u8), v2 matrix index (u8),
+; v3-v5 texcoords, v6 normal (s16).
+.constf myconst(0.0, 1.0, 0.00392156862745, 0.0)
+.alias  zeros  myconst.xxxx
+.alias  ones   myconst.yyyy
+.alias  inv255 myconst.zzzz
+; t9: t1 + texcoord0 written as .xy only, straight from the input (minimal
+; partial output write; expected to hang the GPU on hardware, bug 12)
+.out outpos position
+.out outclr color
+.out outtc0 texcoord0
+.entry t9
+.proc t9
+	mov r0.xyz, v0
+	mov r0.w, ones
+	mov outpos, r0
+	mul outclr, inv255, v1
+	mov outtc0.xy, v3
+	end
+.end

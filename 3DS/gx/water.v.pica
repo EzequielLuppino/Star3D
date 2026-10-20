@@ -1,0 +1,97 @@
+; Projected screen-copy water for the Star 3D port (OPEN_BUGS.md bug 28);
+; gx_render.c picks it for the two passes of a water split
+; (water_split_prepare), which sample only unit 0.
+; Slot 0's (s, t, q) leaves undivided: (s, t) in texcoord0 and q in
+; texcoord0w, and unit 0 samples in GPU_TEX_PROJECTION mode, so the PICA
+; divides per fragment. The other shaders divide per vertex, which smears
+; screen-projected coordinates across the hub's large water triangles and
+; breaks them when a vertex lies behind the camera (q <= 0).
+; texcoord0w has its own output register and every output component is
+; written: the layout of self-test t7, which passed on hardware (bug 12).
+; Inputs match GxOutVertex (gx_internal.h):
+;   v0 = position (3 floats), v1 = color (4 unsigned bytes, 0-255),
+;   v2 = matrix index (bytes; .x = position matrix row, multiple of 3),
+; Shader code memory holds 512 instructions shared by all four variants
+; (475 before this one), so it is minimal: the texgen input is always the
+; position (gx_render.c water_proj_ok checks the texgen source), and
+; texsrc[0] only supplies the warp amplitude
+
+; Uniforms: same order as default.v.pica, so they share its registers
+.fvec projection[4]   ; tilt * viewport * GX projection
+.fvec posmtx[30]      ; GX position matrix memory (10 matrices x 3 rows)
+.fvec texmtx[9]       ; texture matrix (3 rows) for each of the 3 PICA texture slots
+.fvec texsrc[3]       ; per slot: x = texcoord attribute, y = position, z = normal,
+                      ; w = warp amplitude (4x the offset, in texture units)
+.fvec posscale        ; x: position scale (fixed-point inputs), y: normal input scale, z: texcoord scale
+.fvec texwarp         ; here: decode of the colour-carried offsets (xy scale, zw bias);
+                      ; default/warp.v.pica: wave frequencies and phases
+
+; Constants
+.constf myconst(0.0, 1.0, 0.00392156862745, 0.0)
+.alias  zeros     myconst.xxxx
+.alias  ones      myconst.yyyy
+.alias  inv255    myconst.zzzz
+.constf myconst2(0.00006103515625, 2.0, 0.0, 0.0)
+.alias  twos      myconst2.yyyy
+
+; Outputs
+.out outpos position
+.out outclr color
+.out outtc0 texcoord0
+.out outq   texcoord0w
+.out outview view
+.out outnq normalquat
+
+; Inputs
+.alias inpos v0
+.alias inclr v1
+.alias inidx v2
+
+.entry main_water
+.proc main_water
+	; View-space position: posmtx[index] * vec4(pos, 1)
+	mova a0.x, inidx.x
+	mul r0.xyz, posscale.xxx, inpos
+	mov r0.w,   ones
+	dp4 r1.x, posmtx[a0.x], r0
+	dp4 r1.y, posmtx[a0.x+1], r0
+	dp4 r1.z, posmtx[a0.x+2], r0
+	mov r1.w, ones
+
+	; Clip-space position
+	dp4 outpos.x, projection[0], r1
+	dp4 outpos.y, projection[1], r1
+	dp4 outpos.z, projection[2], r1
+	dp4 outpos.w, projection[3], r1
+
+	; Fog through fragment lighting: view vector (0, 0, eye z), no normal
+	mov outview, zeros
+	mov outview.z, r1.z
+	mov outnq, myconst.xxxy
+
+	; Vertex color 0-255 -> 0-1 (the split's combiners read only its alpha;
+	; gx_render.c uses this shader only when channel 0's alpha is unlit
+	; vertex alpha)
+	mul outclr, inv255, inclr
+
+	; Indirect warp stand-in: gx_render.c (water_tessellate) computes the
+	; offsets per vertex on the CPU (the GameCube's caustic reads at TEX0, bug
+	; 35, or bug 33's waves) and passes them in the colour's red/green:
+	; r10.xy = colour.rg * texwarp.xy + texwarp.zw (texwarp = 0: no warp)
+	mul r10.xy, texwarp.xy, inclr.xy
+	add r10.xy, texwarp.zw, r10.xy
+
+	; Slot 0 texgen from the position (r0.w = 1)
+	dp4 r3.x, texmtx[0], r0
+	dp4 r3.y, texmtx[1], r0
+	dp4 r3.z, texmtx[2], r0
+	; The warp offset is added after the divide: (s + w q) / q = s / q + w
+	mul r2.xy, texsrc[0].ww, r10.xy
+	mul r2.xy, r3.zz, r2.xy
+	add r3.xy, r3.xy, r2.xy
+	mov outtc0.zw, zeros
+	mov outtc0.xy, r3.xy
+	mov outq, r3.zzzz
+
+	end
+.end

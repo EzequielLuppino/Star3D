@@ -1,0 +1,65 @@
+; GPU self-test shader (gx_init.c gx_hwtest, S3D_GPU_SELFTEST, bug 14).
+; Inputs follow GxOutVertex: v0 pos, v1 color (u8), v2 matrix index (u8),
+; v3-v5 texcoords, v6 normal (s16).
+.constf myconst(0.0, 1.0, 0.00392156862745, 0.00006103515625)
+.alias  zeros    myconst.xxxx
+.alias  ones     myconst.yyyy
+.alias  inv255   myconst.zzzz
+.alias  inv16384 myconst.wwww
+; td: the old game lit shader's structure (steps 16 hung): outview / outnq
+; written in main, then again in a proc called under ifu fraglit
+.fvec projection[4]
+.fvec posmtx[30]
+.bool fraglit
+.out outpos position
+.out outclr color
+.out outtc0 texcoord0
+.out outtc1 texcoord1
+.out outtc2 texcoord2
+.out outview view
+.out outnq normalquat
+.entry td
+.proc td
+	mova a0.x, v2.x
+	mov r0.xyz, v0
+	mov r0.w, ones
+	dp4 r1.x, posmtx[a0.x], r0
+	dp4 r1.y, posmtx[a0.x+1], r0
+	dp4 r1.z, posmtx[a0.x+2], r0
+	mov r1.w, ones
+	dp4 outpos.x, projection[0], r1
+	dp4 outpos.y, projection[1], r1
+	dp4 outpos.z, projection[2], r1
+	dp4 outpos.w, projection[3], r1
+	mov outview, zeros
+	mov outview.z, r1.z
+	mov outnq, myconst.xxxy
+	ifu fraglit
+		call td_nq
+	.end
+	mul outclr, inv255, v1
+	mov outtc0, zeros
+	mov outtc1, zeros
+	mov outtc2, zeros
+	end
+.end
+
+.proc td_nq
+	dp3 r14.x, posmtx[a0.x], v6
+	dp3 r14.y, posmtx[a0.x+1], v6
+	dp3 r14.z, posmtx[a0.x+2], v6
+	dp3 r13.x, r14, r14
+	rsq r13.x, r13.x
+	mul r14.xyz, r14.xyz, r13.xxx
+	mov outview, -r1
+	mov r11.y, r14.y
+	mov r11.w, zeros
+	add r11.x, inv16384, r14.x
+	add r11.z, ones, r14.z
+	dp4 r12.x, r11, r11
+	mov r12.y, inv16384
+	mul r12.y, inv16384, r12.y
+	max r12.x, r12.y, r12.x
+	rsq r12.x, r12.x
+	mul outnq, r11, r12.xxxx
+.end

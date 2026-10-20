@@ -1,0 +1,26 @@
+; Vertex bench (gx_init.c gx_vbench): v0_io7 with 3 outputs instead of 7
+; (position, color, texcoord0). Same 7 inputs: isolates the output cost.
+
+.constf consts(0.0, 1.0, 0.00392156862745, 0.0)
+.alias zeros consts.xxxx
+.alias ones  consts.yyyy
+
+.out outpos position
+.out outclr color
+.out outtc0 texcoord0
+
+.entry main_io7o3
+.proc main_io7o3
+	mov r0, v0
+	mov r0.w, ones
+	mov outpos, r0
+	mul outclr, consts.zzzz, v1
+	mov r1, v3
+	add r1, r1, v4
+	add r1, r1, v5
+	mul r2, consts.zzzz, v6
+	add r1, r1, r2
+	mul r2, consts.zzzz, v2
+	add outtc0, r1, r2
+	end
+.end

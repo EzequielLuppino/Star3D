@@ -1,0 +1,435 @@
+; GX transform and lighting for the Star 3D port.
+; Inputs match GxOutVertex (gx_internal.h):
+;   v0 = position (3 floats), v1 = color (4 unsigned bytes, 0-255),
+;   v2 = matrix index (bytes; .x = position matrix row, multiple of 3),
+;   v3..v5 = texture coordinates (2 floats each),
+;   v6 = normal (3 shorts, x16384)
+
+; Uniforms
+.fvec projection[4]   ; tilt * viewport * GX projection
+.fvec posmtx[30]      ; GX position matrix memory (10 matrices x 3 rows)
+.fvec texmtx[9]       ; texture matrix (3 rows) for each of the 3 PICA texture slots
+.fvec texsrc[3]       ; per slot: x = texcoord attribute, y = position, z = normal,
+                      ; w = warp amplitude (4x the offset, in texture units)
+.fvec posscale        ; x: position scale (fixed-point inputs), y: normal input scale, z: texcoord scale
+.fvec texwarp         ; warp waves: xy = half the spatial frequency on object x + y / z + y,
+                      ; zw = phases (half-periods / 2 + 0.5)
+.fvec lightpos[8]     ; view-space light positions; w: in channel 0's color light mask
+.fvec lightdir[8]     ; spot directions; w: in channel 0's alpha light mask
+.fvec lightcol[8]     ; light colors (0-1)
+.fvec lighta[8]       ; angle attenuation a0, a1, a2; w: specular (GX_AF_SPEC)
+.fvec lightk[8]       ; distance attenuation k0, k1, k2; w: diffuse clamp (1) or none (0)
+.fvec matreg          ; channel 0 material register color (0-1)
+.fvec ambreg          ; channel 0 ambient register color (0-1)
+.fvec chansel         ; x: material from vertex (rgb), y: material from vertex (alpha),
+                      ; z: ambient from vertex (rgb), w: ambient from vertex (alpha)
+.fvec litsel          ; x: rgb lit, y: alpha lit
+
+.bool tcaff[3]        ; per slot: affine fast path (gx_render.c upload_unit_texmtx): q is 1
+                      ; and the slot does not warp, so (s, t) = texmtx rows 0-1 * input,
+                      ; no divide. Declared first so unlit and warp place them at the same
+                      ; registers (b0-b2). The last bool must stay below b15: b15 does not
+                      ; work as a vertex shader bool on real hardware (it read as set)
+.bool lighten[8]      ; light enabled in channel 0's color or alpha light mask
+.bool lighting        ; any lighting enabled
+.bool warpon          ; some slot has a warp amplitude
+.bool fraglit         ; fragment lighting evaluates channel 1 (specular): needs the
+                      ; full view vector and the normal quaternion
+.bool nrmout          ; render capture normals pass: color = view-space normal / 2 + 0.5
+
+; Constants
+.constf myconst(0.0, 1.0, 0.00392156862745, 0.0)
+.alias  zeros     myconst.xxxx
+.alias  ones      myconst.yyyy
+.alias  inv255    myconst.zzzz
+.constf myconst2(0.00006103515625, 2.0, 0.5, 0.0)
+.alias  inv16384  myconst2.xxxx
+.alias  twos      myconst2.yyyy
+.alias  halfs     myconst2.zzzz
+
+; Outputs
+.out outpos position
+.out outclr color
+.out outtc0 texcoord0
+.out outtc1 texcoord1
+.out outtc2 texcoord2
+.out outview view
+.out outnq normalquat
+
+; Inputs
+.alias inpos v0
+.alias inclr v1
+.alias inidx v2
+.alias intc0 v3
+.alias intc1 v4
+.alias intc2 v5
+.alias innrm v6
+
+.proc main
+	; View-space position: posmtx[index] * vec4(pos, 1)
+	mova a0.x, inidx.x
+	mul r0.xyz, posscale.xxx, inpos
+	mov r0.w,   ones
+	dp4 r1.x, posmtx[a0.x], r0
+	dp4 r1.y, posmtx[a0.x+1], r0
+	dp4 r1.z, posmtx[a0.x+2], r0
+	mov r1.w, ones
+
+	; Clip-space position
+	dp4 outpos.x, projection[0], r1
+	dp4 outpos.y, projection[1], r1
+	dp4 outpos.z, projection[2], r1
+	dp4 outpos.w, projection[3], r1
+
+	; Fragment lighting inputs (gx_render.c apply_light_env): r12 = view
+	; vector, r11 = normal quaternion. Without fraglit, fragment lighting only
+	; evaluates the fog: a light at the eye whose distance attenuation LUT holds
+	; the fog curve, so the view vector is (0, 0, eye z).
+	; Bug 14: the real GPU hung when this was a call to a proc that wrote
+	; outview / outnq a second time. Now inline, each output written once
+	ifu fraglit
+		; q = (0.5 n.xy / c, c, 0) with c = sqrt((1 + n.z) / 2), computed as
+		; normalize(n.x + eps, n.y, 1 + n.z, 0): a normal facing straight away
+		; from +z gets (1, 0, 0, 0)
+		dp3 r14.x, posmtx[a0.x], innrm
+		dp3 r14.y, posmtx[a0.x+1], innrm
+		dp3 r14.z, posmtx[a0.x+2], innrm
+		dp3 r13.x, r14, r14
+		rsq r13.x, r13.x
+		mul r14.xyz, r14.xyz, r13.xxx
+		mov r12, -r1
+		mov r11.y, r14.y
+		mov r11.w, zeros
+		add r11.x, inv16384, r14.x
+		add r11.z, ones, r14.z
+		dp4 r13.x, r11, r11
+		mov r13.y, inv16384
+		mul r13.y, inv16384, r13.y
+		max r13.x, r13.y, r13.x
+		rsq r13.x, r13.x
+		mul r11, r11, r13.xxxx
+	.else
+		mov r12, zeros
+		mov r12.z, r1.z
+		mov r11, myconst.xxxy
+	.end
+	mov outview, r12
+	mov outnq, r11
+
+	; Vertex color 0-255 -> 0-1
+	mul r4, inv255, inclr
+
+	; Bug 14: outclr written exactly once (nrmout used to overwrite it after
+	; the light proc, which hangs the real GPU)
+	ifu nrmout
+		call nrmclr
+	.else
+		ifu lighting
+			call light
+		.else
+			mov outclr, r4
+		.end
+	.end
+
+	; Indirect warp stand-in (water): r10.xy = sin(pi * a) of two travelling
+	; waves over object x and z, approximated as 4u(1 - |u|) on the wrapped
+	; angle u in [-1, 1); each slot adds texsrc.w * r10.xy after the divide
+	mov r10, zeros
+	ifu warpon
+		; over x + y and z + y, so walls (x or z constant) ripple too (bug 33)
+		add r10.xy, r0.xz, r0.yy
+		mul r10.xy, texwarp.xy, r10.xy
+		add r10.xy, texwarp.zw, r10.xy
+		flr r11.xy, r10.xy
+		add r10.xy, r10.xy, -r11.xy
+		mul r10.xy, twos, r10.xy
+		add r10.xy, -ones, r10.xy
+		max r11.xy, r10.xy, -r10.xy
+		add r11.xy, ones, -r11.xy
+		mul r10.xy, r10.xy, r11.xy
+	.end
+
+	; Texture coordinates (MULTICORE_PLAN.md, "Leaner vertex shaders"). The
+	; general path: input = texsrc.x * (s, t, 1, 1) + texsrc.y * (pos, 1)
+	; + texsrc.z * (normal, 1); (s, t, q) = texmtx * input, divided by q, plus
+	; the warp. With tcaff[s] the slot takes the affine fast path instead: the
+	; same input, no divide and no warp (same result when w = 0 and row 2 =
+	; (0, 0, 0, 1), so q = 1). Slots 1 and 2 output zeros when the CPU marks
+	; them unused (texsrc.y = 2). Every output register is written once, all 4
+	; components, on every path: a partial write (bug 12) or a second write
+	; (bug 14) hangs the real GPU
+	; Normal input (x16384 or x64), for both paths
+	mul r9.xyz, posscale.yyy, innrm
+	mov r9.w, ones
+	; Bug 27: skinned models give each vertex its own joint's texture matrix
+	; (GX TEXnMTXIDX) for sphere maps, the joint's position matrix times a
+	; uniform scale (gx_render.c nrm_pervertex). posscale.w = 2: turn the
+	; normal by the vertex's position matrix, the slot's texmtx holds the scale
+	cmp posscale.wwww, gt, gt, r9.wwww
+	ifc cmp.x
+		dp3 r3.x, posmtx[a0.x], r9
+		dp3 r3.y, posmtx[a0.x+1], r9
+		dp3 r3.z, posmtx[a0.x+2], r9
+		mov r9.xyz, r3.xyz
+	.end
+	ifu tcaff[0]
+		mul r2.xy, posscale.zz, intc0
+		mov r2.zw, ones
+		mul r2, texsrc[0].xxxx, r2
+		mad r2, r0, texsrc[0].yyyy, r2
+		mad r2, r9, texsrc[0].zzzz, r2
+		dp4 outtc0.x, texmtx[0], r2
+		dp4 outtc0.y, texmtx[1], r2
+		mov outtc0.zw, zeros
+	.else
+		mul r2.xy, posscale.zz, intc0
+		mov r2.zw, ones
+		mul r2, texsrc[0].xxxx, r2
+		mul r3, texsrc[0].yyyy, r0
+		add r2, r2, r3
+		mul r3, texsrc[0].zzzz, r9
+		add r2, r2, r3
+		dp4 r3.x, texmtx[0], r2
+		dp4 r3.y, texmtx[1], r2
+		dp4 r3.z, texmtx[2], r2
+		; divided per vertex like slots 1 and 2 (no texcoord0w output) while bug 12
+		; is checked: t3 blamed texcoord0w, but its partial write was the likely cause
+		rcp r3.z, r3.z
+		mul r3.xy, r3.zz, r3.xy
+		mul r2.xy, texsrc[0].ww, r10.xy
+		mov outtc0.zw, zeros
+		add outtc0.xy, r2.xy, r3.xy
+	.end
+
+	; Slot 1 unused: texsrc[1].y = 2 (r9.w = 1). A marker, not a bool: b15
+	; misbehaves on real hardware, so the bools stop at b14
+	cmp texsrc[1].yyyy, gt, gt, r9.wwww
+	ifc cmp.x
+		mov outtc1, zeros
+	.else
+		ifu tcaff[1]
+			mul r2.xy, posscale.zz, intc1
+			mov r2.zw, ones
+			mul r2, texsrc[1].xxxx, r2
+			mad r2, r0, texsrc[1].yyyy, r2
+			mad r2, r9, texsrc[1].zzzz, r2
+			dp4 outtc1.x, texmtx[3], r2
+			dp4 outtc1.y, texmtx[4], r2
+			mov outtc1.zw, zeros
+		.else
+			mul r2.xy, posscale.zz, intc1
+			mov r2.zw, ones
+			mul r2, texsrc[1].xxxx, r2
+			mul r3, texsrc[1].yyyy, r0
+			add r2, r2, r3
+			mul r3, texsrc[1].zzzz, r9
+			add r2, r2, r3
+			dp4 r3.x, texmtx[3], r2
+			dp4 r3.y, texmtx[4], r2
+			dp4 r3.z, texmtx[5], r2
+			rcp r3.z, r3.z
+			mul r3.xy, r3.zz, r3.xy
+			mul r2.xy, texsrc[1].ww, r10.xy
+			mov outtc1.zw, zeros
+			add outtc1.xy, r2.xy, r3.xy
+		.end
+	.end
+
+	; Slot 2 unused: texsrc[2].y = 2
+	cmp texsrc[2].yyyy, gt, gt, r9.wwww
+	ifc cmp.x
+		mov outtc2, zeros
+	.else
+		ifu tcaff[2]
+			mul r2.xy, posscale.zz, intc2
+			mov r2.zw, ones
+			mul r2, texsrc[2].xxxx, r2
+			mad r2, r0, texsrc[2].yyyy, r2
+			mad r2, r9, texsrc[2].zzzz, r2
+			dp4 outtc2.x, texmtx[6], r2
+			dp4 outtc2.y, texmtx[7], r2
+			mov outtc2.zw, zeros
+		.else
+			mul r2.xy, posscale.zz, intc2
+			mov r2.zw, ones
+			mul r2, texsrc[2].xxxx, r2
+			mul r3, texsrc[2].yyyy, r0
+			add r2, r2, r3
+			mul r3, texsrc[2].zzzz, r9
+			add r2, r2, r3
+			dp4 r3.x, texmtx[6], r2
+			dp4 r3.y, texmtx[7], r2
+			dp4 r3.z, texmtx[8], r2
+			rcp r3.z, r3.z
+			mul r3.xy, r3.zz, r3.xy
+			mul r2.xy, texsrc[2].ww, r10.xy
+			mov outtc2.zw, zeros
+			add outtc2.xy, r2.xy, r3.xy
+		.end
+	.end
+
+	end
+.end
+
+; GX lighting channel 0 (color and alpha).
+; In: r1 = view-space position, r4 = vertex color (0-1), a0.x = matrix row.
+.proc light
+	; View-space normal (the position matrix stands in for the normal matrix)
+	dp3 r5.x, posmtx[a0.x], innrm
+	dp3 r5.y, posmtx[a0.x+1], innrm
+	dp3 r5.z, posmtx[a0.x+2], innrm
+	dp3 r6.x, r5, r5
+	rsq r6.x, r6.x
+	mul r5.xyz, r5.xyz, r6.xxx
+
+	; material = mix(register, vertex color, chansel.xy)
+	add r7, -matreg, r4
+	mul r7, chansel.xxxy, r7
+	add r7, matreg, r7
+
+	; light sum starts at ambient = mix(register, vertex color, chansel.zw)
+	add r8, -ambreg, r4
+	mul r8, chansel.zzzw, r8
+	add r8, ambreg, r8
+
+	ifu lighten[0]
+		mova a0.y, zeros
+		call onelight
+	.end
+	ifu lighten[1]
+		mova a0.y, myconst.yyyy
+		call onelight
+	.end
+	ifu lighten[2]
+		call light2
+	.end
+	ifu lighten[3]
+		call light3
+	.end
+	ifu lighten[4]
+		call light4
+	.end
+	ifu lighten[5]
+		call light5
+	.end
+	ifu lighten[6]
+		call light6
+	.end
+	ifu lighten[7]
+		call light7
+	.end
+
+	; out = material * (lit ? clamp(sum) : 1), per rgb / alpha
+	max r8, zeros, r8
+	min r8, ones, r8
+	add r9, -ones, r8
+	mul r9, litsel.xxxy, r9
+	add r9, ones, r9
+	mul outclr, r7, r9
+.end
+
+.constf lightidx(2.0, 3.0, 4.0, 5.0)
+.constf lightidx2(6.0, 7.0, 0.0, 0.0)
+.proc light2
+	mova a0.y, lightidx.xxxx
+	call onelight
+.end
+.proc light3
+	mova a0.y, lightidx.yyyy
+	call onelight
+.end
+.proc light4
+	mova a0.y, lightidx.zzzz
+	call onelight
+.end
+.proc light5
+	mova a0.y, lightidx.wwww
+	call onelight
+.end
+.proc light6
+	mova a0.y, lightidx2.xxxx
+	call onelight
+.end
+.proc light7
+	mova a0.y, lightidx2.yyyy
+	call onelight
+.end
+
+; Add light a0.y to r8. r1 = position, r5 = normal.
+; The color and alpha channels each have their own light mask; a light's
+; diffuse and attenuation functions are those of the channel it belongs to
+; (gx_render.c upload_lighting).
+.proc onelight
+	; L = lightpos - pos, d = |L|, L /= d
+	add r10.xyz, lightpos[a0.y], -r1
+	dp3 r11.x, r10, r10          ; d^2
+	rsq r11.y, r11.x             ; 1/d
+	mul r10.xyz, r10.xyz, r11.yyy
+	mul r11.z, r11.x, r11.y      ; d
+
+	; diffuse = clamp ? max(N.L, 0) : 1
+	mov r14, lightk[a0.y]
+	dp3 r12.x, r5, r10
+	max r12.y, zeros, r12.x
+	add r12.y, -ones, r12.y
+	mul r12.y, r14.w, r12.y
+	add r12.y, ones, r12.y
+
+	; angle attenuation: a0 + a1*cos + a2*cos^2 with cos = -L.dir (spot) or,
+	; for specular lights, cos = N.H, zero when the surface faces away from
+	; the light; the "distance" polynomial then takes cos as well
+	mov r15, lighta[a0.y]
+	dp3 r13.x, lightdir[a0.y], -r10
+	dp3 r12.z, lightdir[a0.y], r5
+	max r12.z, zeros, r12.z
+	slt r12.x, zeros, r12.x
+	mul r12.z, r12.z, r12.x
+	; select by multiplying with spec / 1 - spec: blending would cancel
+	; catastrophically against the huge d^2 of directional lights
+	add r12.w, ones, -r15.w
+	mul r12.z, r15.w, r12.z
+	mul r13.x, r12.w, r13.x
+	add r13.x, r13.x, r12.z
+	mul r11.z, r12.w, r11.z
+	add r11.z, r11.z, r12.z
+	mul r12.z, r12.z, r12.z
+	mul r11.x, r12.w, r11.x
+	add r11.x, r11.x, r12.z
+
+	mul r13.y, r13.x, r13.x
+	mul r13.z, r15.y, r13.x
+	mad r13.z, r15.z, r13.y, r13.z
+	add r13.z, r15.x, r13.z
+	max r13.z, zeros, r13.z
+
+	; distance attenuation: k0 + k1*d + k2*d^2
+	mul r13.w, r14.y, r11.z
+	mad r13.w, r14.z, r11.x, r13.w
+	add r13.w, r14.x, r13.w
+	rcp r13.w, r13.w
+
+	; sum += color * diffuse * attenuation, masked per color / alpha channel
+	mul r12.x, r12.y, r13.z
+	mul r12.x, r12.x, r13.w
+	mov r14.x, lightpos[a0.y].w
+	mov r14.y, lightdir[a0.y].w
+	mul r12.xy, r12.xx, r14.xy
+	mul r15, lightcol[a0.y], r12.xxxy
+	add r8, r8, r15
+.end
+
+; Render capture: view-space normal as color (no normal = (0.5, 0.5, 0.5))
+.proc nrmclr
+	dp3 r14.x, posmtx[a0.x], innrm
+	dp3 r14.y, posmtx[a0.x+1], innrm
+	dp3 r14.z, posmtx[a0.x+2], innrm
+	mov r14.w, zeros
+	dp3 r13.x, r14, r14
+	max r13.x, inv16384, r13.x
+	rsq r13.x, r13.x
+	mul r14.xyz, r14.xyz, r13.xxx
+	mul r14.xyz, halfs, r14.xyz
+	add r14.xyz, halfs, r14.xyz
+	mov r14.w, ones
+	mov outclr, r14
+.end

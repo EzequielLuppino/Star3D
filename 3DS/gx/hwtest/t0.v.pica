@@ -1,0 +1,30 @@
+; GPU self-test shader (gx_init.c gx_hwtest, S3D_GPU_SELFTEST, bug 12).
+; Inputs follow GxOutVertex: v0 pos, v1 color (u8), v2 matrix index (u8),
+; v3-v5 texcoords, v6 normal (s16).
+.constf myconst(0.0, 1.0, 0.00392156862745, 0.0)
+.alias  zeros  myconst.xxxx
+.alias  ones   myconst.yyyy
+.alias  inv255 myconst.zzzz
+; t0: the benchmark shader (bench.v.pica, known to work on hardware)
+.out outpos position
+.out outclr color
+.out outtc0 texcoord0
+.out outtc1 texcoord1
+.out outq   normalquat
+.out outv   view
+.entry t0
+.proc t0
+	mov r0.xyz, v0
+	mov r0.w, ones
+	mov outpos, r0
+	mul outclr, inv255, v1
+	mov outtc0, v3
+	mov outtc1, v3
+	mov r1, zeros
+	mov r1.w, ones
+	mov outq, r1
+	mov r2, zeros
+	mov r2.z, ones
+	mov outv, r2
+	end
+.end

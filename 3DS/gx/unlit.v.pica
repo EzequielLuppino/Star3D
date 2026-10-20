@@ -1,0 +1,177 @@
+; GX transform without lighting or warp for the Star 3D port; gx_render.c
+; picks it when no channel is lit and no texture slot warps (default.v.pica
+; is the vertex-lit variant, warp.v.pica the warped one).
+; Inputs match GxOutVertex (gx_internal.h):
+;   v0 = position (3 floats), v1 = color (4 unsigned bytes, 0-255),
+;   v2 = matrix index (bytes; .x = position matrix row, multiple of 3),
+;   v3..v5 = texture coordinates (2 floats each),
+;   v6 = normal (3 shorts, x16384)
+
+; Uniforms
+.fvec projection[4]   ; tilt * viewport * GX projection
+.fvec posmtx[30]      ; GX position matrix memory (10 matrices x 3 rows)
+.fvec texmtx[9]       ; texture matrix (3 rows) for each of the 3 PICA texture slots
+.fvec texsrc[3]       ; per slot: x = texcoord attribute, y = position, z = normal
+.fvec posscale        ; x: position scale (fixed-point inputs), y: normal input scale, z: texcoord scale
+
+; Same bool registers as default.v.pica (gx_init.c checks)
+.bool tcaff[3]        ; slot takes the affine path: q = 1, no divide (see default.v.pica)
+
+; Constants
+.constf myconst(0.0, 1.0, 0.00392156862745, 0.0)
+.alias  zeros     myconst.xxxx
+.alias  ones      myconst.yyyy
+.alias  inv255    myconst.zzzz
+
+; Outputs
+.out outpos position
+.out outclr color
+.out outtc0 texcoord0
+.out outtc1 texcoord1
+.out outtc2 texcoord2
+.out outview view
+.out outnq normalquat
+
+; Inputs
+.alias inpos v0
+.alias inclr v1
+.alias inidx v2
+.alias intc0 v3
+.alias intc1 v4
+.alias intc2 v5
+.alias innrm v6
+
+.entry main_unlit
+.proc main_unlit
+	; View-space position: posmtx[index] * vec4(pos, 1)
+	mova a0.x, inidx.x
+	mul r0.xyz, posscale.xxx, inpos
+	mov r0.w,   ones
+	dp4 r1.x, posmtx[a0.x], r0
+	dp4 r1.y, posmtx[a0.x+1], r0
+	dp4 r1.z, posmtx[a0.x+2], r0
+	mov r1.w, ones
+
+	; Clip-space position
+	dp4 outpos.x, projection[0], r1
+	dp4 outpos.y, projection[1], r1
+	dp4 outpos.z, projection[2], r1
+	dp4 outpos.w, projection[3], r1
+
+	; Fog view vector (see default.v.pica)
+	mov outview, zeros
+	mov outview.z, r1.z
+	mov outnq, myconst.xxxy
+
+	; Vertex color 0-255 -> 0-1
+	mul outclr, inv255, inclr
+
+	; Texture coordinates: affine fast path or general path per slot, slots 1
+	; and 2 skipped when unused (see default.v.pica). Every output register is
+	; written once, all 4 components, on every path (bugs 12 and 14)
+	; Normal input (x16384 or x64), for both paths
+	mul r9.xyz, posscale.yyy, innrm
+	mov r9.w, ones
+	; Bug 27: skinned models give each vertex its own joint's texture matrix
+	; (GX TEXnMTXIDX) for sphere maps, the joint's position matrix times a
+	; uniform scale (gx_render.c nrm_pervertex). posscale.w = 2: turn the
+	; normal by the vertex's position matrix, the slot's texmtx holds the scale
+	cmp posscale.wwww, gt, gt, r9.wwww
+	ifc cmp.x
+		dp3 r3.x, posmtx[a0.x], r9
+		dp3 r3.y, posmtx[a0.x+1], r9
+		dp3 r3.z, posmtx[a0.x+2], r9
+		mov r9.xyz, r3.xyz
+	.end
+	ifu tcaff[0]
+		mul r2.xy, posscale.zz, intc0
+		mov r2.zw, ones
+		mul r2, texsrc[0].xxxx, r2
+		mad r2, r0, texsrc[0].yyyy, r2
+		mad r2, r9, texsrc[0].zzzz, r2
+		dp4 outtc0.x, texmtx[0], r2
+		dp4 outtc0.y, texmtx[1], r2
+		mov outtc0.zw, zeros
+	.else
+		mul r2.xy, posscale.zz, intc0
+		mov r2.zw, ones
+		mul r2, texsrc[0].xxxx, r2
+		mul r3, texsrc[0].yyyy, r0
+		add r2, r2, r3
+		mul r3, texsrc[0].zzzz, r9
+		add r2, r2, r3
+		dp4 r3.x, texmtx[0], r2
+		dp4 r3.y, texmtx[1], r2
+		dp4 r3.z, texmtx[2], r2
+		; divided per vertex like slots 1 and 2 (no texcoord0w output) while bug 12
+		; is checked: t3 blamed texcoord0w, but its partial write was the likely cause
+		rcp r3.z, r3.z
+		mov outtc0.zw, zeros
+		mul outtc0.xy, r3.zz, r3.xy
+	.end
+
+	; Slot 1 unused: texsrc[1].y = 2 (r9.w = 1). A marker, not a bool: b15
+	; misbehaves on real hardware, so the bools stop at b14
+	cmp texsrc[1].yyyy, gt, gt, r9.wwww
+	ifc cmp.x
+		mov outtc1, zeros
+	.else
+		ifu tcaff[1]
+			mul r2.xy, posscale.zz, intc1
+			mov r2.zw, ones
+			mul r2, texsrc[1].xxxx, r2
+			mad r2, r0, texsrc[1].yyyy, r2
+			mad r2, r9, texsrc[1].zzzz, r2
+			dp4 outtc1.x, texmtx[3], r2
+			dp4 outtc1.y, texmtx[4], r2
+			mov outtc1.zw, zeros
+		.else
+			mul r2.xy, posscale.zz, intc1
+			mov r2.zw, ones
+			mul r2, texsrc[1].xxxx, r2
+			mul r3, texsrc[1].yyyy, r0
+			add r2, r2, r3
+			mul r3, texsrc[1].zzzz, r9
+			add r2, r2, r3
+			dp4 r3.x, texmtx[3], r2
+			dp4 r3.y, texmtx[4], r2
+			dp4 r3.z, texmtx[5], r2
+			rcp r3.z, r3.z
+			mov outtc1.zw, zeros
+			mul outtc1.xy, r3.zz, r3.xy
+		.end
+	.end
+
+	; Slot 2 unused: texsrc[2].y = 2
+	cmp texsrc[2].yyyy, gt, gt, r9.wwww
+	ifc cmp.x
+		mov outtc2, zeros
+	.else
+		ifu tcaff[2]
+			mul r2.xy, posscale.zz, intc2
+			mov r2.zw, ones
+			mul r2, texsrc[2].xxxx, r2
+			mad r2, r0, texsrc[2].yyyy, r2
+			mad r2, r9, texsrc[2].zzzz, r2
+			dp4 outtc2.x, texmtx[6], r2
+			dp4 outtc2.y, texmtx[7], r2
+			mov outtc2.zw, zeros
+		.else
+			mul r2.xy, posscale.zz, intc2
+			mov r2.zw, ones
+			mul r2, texsrc[2].xxxx, r2
+			mul r3, texsrc[2].yyyy, r0
+			add r2, r2, r3
+			mul r3, texsrc[2].zzzz, r9
+			add r2, r2, r3
+			dp4 r3.x, texmtx[6], r2
+			dp4 r3.y, texmtx[7], r2
+			dp4 r3.z, texmtx[8], r2
+			rcp r3.z, r3.z
+			mov outtc2.zw, zeros
+			mul outtc2.xy, r3.zz, r3.xy
+		.end
+	.end
+
+	end
+.end

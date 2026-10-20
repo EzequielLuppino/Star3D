@@ -1,0 +1,38 @@
+# Structs whose foxhollow STATIC_ASSERTs fail on ARM32 but whose ARM layout was
+# checked against SFA-Decomp (retail) and is either identical to retail (the
+# asserts record the 64-bit PC layout) or a deliberate port-only extension that
+# is allocated with sizeof and never read from disc. probe_layout.sh lists
+# failures for these separately.
+#
+# ARM layout == retail; asserts are 64-bit offsets
+ScTotemStrengthState
+ScMusicTreeState
+CmbSrcState
+DBSHShrineState
+DBSHSymbolState
+MmshShrineState
+MmshScalesState
+LightfootControlState
+LightfootState
+ScCloudrunnerAState
+WcLevelControlState
+WarpStoneState
+ShStaffState
+ShBeaconState
+NwTreeBridgeState
+KytesMumRuntime
+GunpowderBarrelState
+SpellStonePlacement
+# port-only extensions (extra fields appended, sizeof-allocated)
+TrickyState
+CameraModeNormalState
+SpscarabPlacement
+ShopkeeperSpawnSetup
+ObjSeqStreamMapEntry
+# PC-side views of SDK/Aurora types
+Texture
+OSThread
+ObjHitReactState
+GameLoopRenderModeStorage
+AttractMovieDecodeThread
+AttractMovieAudioDecodeLayout
