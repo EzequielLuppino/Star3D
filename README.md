@@ -38,7 +38,7 @@ the output.
 The game code and the decompilation are git submodules, so clone recursively:
 
 ```sh
-git clone --recursive <this repository's URL>
+git clone --recursive https://github.com/EzequielLuppino/Star3D/
 ```
 
 If you already cloned without `--recursive`:
