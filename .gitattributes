@@ -1,0 +1,9 @@
+# Scripts run inside the Linux build container: keep LF line endings even when
+# checked out on Windows
+*.sh        text eol=lf
+*.py        text eol=lf
+Makefile    text eol=lf
+Dockerfile  text eol=lf
+*.sed       text eol=lf
+*.pica      text eol=lf
+*.bat       text eol=crlf

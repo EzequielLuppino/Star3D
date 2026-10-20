@@ -1,0 +1,6 @@
+[submodule "foxhollow"]
+	path = foxhollow
+	url = https://github.com/JackPriceBurns/foxhollow.git
+[submodule "SFA-Decomp"]
+	path = SFA-Decomp
+	url = https://github.com/zcanann/SFA-Decomp.git
