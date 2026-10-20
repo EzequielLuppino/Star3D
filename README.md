@@ -210,6 +210,36 @@ these defaults is ignored once. For bug reports, turn Logging on (or put
 `S3D_LOG_VERBOSE=1` in `env.txt`): with it off, only warnings and errors are
 logged after the first frame.
 
+## Languages
+
+The game text can be English, French, German, Italian or Spanish, as on the
+PAL GameCube release. On the title screen, open the fourth entry (the one
+with Subtitles): the five languages are listed under Subtitles. Pick one with
+A and the menus change at once.
+
+- A new save starts in the 3DS system language (any other system language
+  gives English). Saves from older builds of the port start in English.
+- The language is kept in the save's options, like Subtitles, so it is
+  written to the card with the next save (or when the title screen creates
+  the save file).
+- Saves imported from a PAL GameCube card keep their language.
+- `FOXHOLLOW_LANGUAGE=en|fr|de|it|es` in `env.txt` forces a language at boot
+  and the save's language is then ignored (the menu still changes it until
+  the next start).
+- Voices stay English (the PAL disc has only English speech).
+- The dino language cheat has no On/Off row in this menu, as in the PAL game.
+
+How it works (the build compiles the US code against the PAL disc, so the
+US code had no language switch): `3DS/patches/dlls/engine/55/55.c.sed` puts
+the PAL panel and its selection handler in the options screen,
+`3DS/patches/main/textrender_run.c.sed` adds `gameTextSetLanguage` (the PAL
+one without the disc-error messages) and the save language helpers,
+`3DS/patches/dlls/engine/21/21.c.sed` applies the saved language when the
+options load, `3DS/patches/dlls/engine/23/23.c.sed` sets a new save's
+default, `3DS/patches/include/main/dll/savedata_struct.h.sed` names the
+options byte (`languageIndex`, the US layout's `pad01`), and `OSGetLanguage`
+(`3DS/port/os_3ds.c`) reads the 3DS system language.
+
 ## Files on the SD card
 
 | Path | Contents |

@@ -282,8 +282,32 @@ u32 OSGetSoundMode(void) { return sSoundMode; }
 void OSSetSoundMode(u32 mode) { sSoundMode = mode; }
 u32 OSGetProgressiveMode(void) { return sProgressiveMode; }
 void OSSetProgressiveMode(u32 mode) { sProgressiveMode = mode; }
-u8 OSGetLanguage(void) { return sLanguage; }
-void OSSetLanguage(u8 language) { sLanguage = language; }
+static u8 sLanguageRead;
+
+// The GameCube language comes from the 3DS system setting (read once). It is
+// the default for a new save's language (PAL language menu, see
+// gameTextApplySaveLanguage). Languages the PAL disc has no text for,
+// including Dutch, map to English, so the Dutch-only first-boot and memory
+// card paths never run.
+u8 OSGetLanguage(void) {
+    if (!sLanguageRead) {
+        u8 lang = CFG_LANGUAGE_EN;
+        sLanguageRead = 1;
+        if (R_SUCCEEDED(cfguInit())) {
+            CFGU_GetSystemLanguage(&lang);
+            cfguExit();
+        }
+        switch (lang) {
+            case CFG_LANGUAGE_DE: sLanguage = OS_LANGUAGE_GERMAN; break;
+            case CFG_LANGUAGE_FR: sLanguage = OS_LANGUAGE_FRENCH; break;
+            case CFG_LANGUAGE_ES: sLanguage = OS_LANGUAGE_SPANISH; break;
+            case CFG_LANGUAGE_IT: sLanguage = OS_LANGUAGE_ITALIAN; break;
+            default:              sLanguage = OS_LANGUAGE_ENGLISH; break;
+        }
+    }
+    return sLanguage;
+}
+void OSSetLanguage(u8 language) { sLanguage = language; sLanguageRead = 1; }
 u32 OSGetResetCode(void) { return 0; }
 BOOL OSGetResetButtonState(void) { return FALSE; }
 void OSSetSaveRegion(void* start, void* end) { (void)start; (void)end; }
