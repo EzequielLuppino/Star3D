@@ -318,6 +318,7 @@ static void run_frame_boundary(const u32* p) {
     __dmb();
     s_frames_done++;
     __dmb();
+    gx_dlcache_prof_frame();
     if (s_prod_waiting) LightEvent_Signal(&s_ev_progress);
 }
 

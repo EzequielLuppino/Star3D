@@ -1042,6 +1042,58 @@ static GxDyn16Vertex* frame_copy16(GxDyn16Vertex* src, u32 n) {
     return d;
 }
 
+// --- DL-call cost split (S3D_DLCALL_PROFILE) --------------------------------------
+// The DL-call opcode (gx_dl_call_hashed) is the render thread's biggest single
+// cost; its inner zones are hidden by the per-opcode phase in the sampler, so
+// these sums split the call into its parts directly. Logged every 120 frames
+// as "dlcall" lines: ms/frame per part, per call.
+static int s_dlcp_on;
+static u64 s_dlcp_t[8];
+static u32 s_dlcp_calls;
+static u64 s_dlcp_play_gather, s_dlcp_play_draws;
+static u32 s_dlcp_frames;
+
+static void dlcp_init(void) {
+    static bool done;
+    if (done) return;
+    done = true;
+    s_dlcp_on = cfg_int("S3D_DLCALL_PROFILE", 0) != 0;
+}
+
+static void dlcp_add(int part, u64 dt) {
+    if (!s_dlcp_on) return;
+    s_dlcp_t[part] += dt;
+}
+
+static void dlcp_report(int frames) {
+    if (!s_dlcp_on || frames <= 0) return;
+    double per = 1.0 / (SYSCLOCK_ARM11 / 1000.0) / frames;  // ticks -> ms per frame
+    LOG_DEBUG("dlcall", "dlcall %.2f ms/frame, %u calls: prepare %.2f lookup %.2f dlb %.2f validate %.2f gather %.2f "
+             "draws %.2f uncached %.2f rest %.2f (play gather %.2f, play draws %.2f)",
+             (double)(s_dlcp_t[0] + s_dlcp_t[1] + s_dlcp_t[2] + s_dlcp_t[3] + s_dlcp_t[4] + s_dlcp_t[5] +
+                      s_dlcp_t[6] + s_dlcp_t[7]) * per,
+             (unsigned)s_dlcp_calls / (unsigned)frames, (double)s_dlcp_t[0] * per, (double)s_dlcp_t[1] * per,
+             (double)s_dlcp_t[2] * per, (double)s_dlcp_t[3] * per, (double)s_dlcp_t[4] * per, (double)s_dlcp_t[5] * per,
+             (double)s_dlcp_t[6] * per, (double)s_dlcp_t[7] * per, (double)s_dlcp_play_gather * per,
+             (double)s_dlcp_play_draws * per);
+    memset(s_dlcp_t, 0, sizeof(s_dlcp_t));
+    s_dlcp_calls = 0;
+    s_dlcp_play_gather = s_dlcp_play_draws = 0;
+}
+
+// Called once per frame from the render thread's frame boundary (gx_rec.c):
+// the game thread also runs gx_dlcache_frame_end, so the window counter must
+// not live there
+void gx_dlcache_prof_frame(void) {
+    if (!s_dlcp_on) return;
+    gx_render_drawc_prof_on();
+    if (++s_dlcp_frames >= 120) {
+        dlcp_report(120);
+        gx_render_drawc_report(120);
+        s_dlcp_frames = 0;
+    }
+}
+
 // Flush the dynamic pool once per frame (called before the frame is submitted)
 void gx_dlcache_frame_end(void) {
     gxrec_dlb_log();
@@ -1064,6 +1116,8 @@ void gx_dlcache_frame_end(void) {
 static bool play_entry(const DlEntry* e) {
     GxDynVertex* dyn = NULL;
     GxDyn16Vertex* dyn16 = NULL;
+    if (s_dlcp_on) s_dlcp_play_gather = s_dlcp_play_draws = 0;
+    u64 t_g = svcGetSystemTick();
     s_vs_frame[0] += e->st_idx;
     s_vs_frame[1] += e->st_vtx;
     s_vs_frame[2] += e->st_weld;
@@ -1074,6 +1128,7 @@ static bool play_entry(const DlEntry* e) {
     if (e->gather) {
         GX_PROF_ZONE("gx.gather");
         if (e->gather16) {
+            GX_PROF_ZONE("gx.gather16");
             DlEntry* me = (DlEntry*)e;
             if (me->inc_dyn && me->inc_epoch == s_dyn_pool_epoch) {
                 update_incremental(me);
@@ -1096,12 +1151,15 @@ static bool play_entry(const DlEntry* e) {
             PROF_COUNT("dl.gathered_vertices", e->vcount);
         }
     }
+    s_dlcp_play_gather += svcGetSystemTick() - t_g;
+    u64 t_d = svcGetSystemTick();
 
     for (u32 i = 0; i < e->op_count; i++) {
         const DlOp* op = &e->ops[i];
         if (op->is_segment) {
             const DlSegment* seg = &e->segs[op->offset];
             if (!seg->icount) continue;
+            GX_PROF_ZONE("gx.dl.segment");
             if (dyn16) {
                 gx_render_draw_cached_dynamic16(&e->verts[seg->vstart], &dyn16[seg->vstart],
                                                 &e->indices[seg->istart], seg->icount, e->gather16_scale);
@@ -1120,6 +1178,7 @@ static bool play_entry(const DlEntry* e) {
             gx_vtx_exec_command(e->list, e->nbytes, op->offset);
         }
     }
+    s_dlcp_play_draws += svcGetSystemTick() - t_d;
     PROF_COUNT("dl.replay_ops", e->op_count);
     PROF_COUNT("dl.replay_segments", e->seg_count);
     return true;
@@ -1377,11 +1436,15 @@ void gx_dl_call_hashed(const void* list, u32 nbytes, u32 mask, const u32* hashes
 void GXCallDisplayList(const void* list, u32 nbytes) {
     if (!list || nbytes == 0) return;
     GX_PROF_ZONE("gx.displaylist");
+    dlcp_init();
+    u64 t0 = svcGetSystemTick(), t1 = t0, t2 = t0, t3 = t0, t4 = t0;
 
     // While instances are held only matrices can have changed, which leave the
     // unit map alone: the draw that needs them uploads them (gx_dlbatch_flush)
     const GxUnitMap* map =
         g_dlb_pending && g_gx.dirty == GX_DIRTY_POSMTX ? gx_render_unit_map() : gx_render_prepare();
+    t1 = svcGetSystemTick();
+    dlcp_add(0, t1 - t0);
     u32 state_hash, list_hash;
     DlEntry* e;
     const u32* pre = s_pre.list == list ? s_pre.h : NULL;
@@ -1393,6 +1456,8 @@ void GXCallDisplayList(const void* list, u32 nbytes) {
         list_hash = pre ? pre[0] : hash_bytes_sampled(list, nbytes, 32);
         e = find_slot(list, state_hash);
     }
+    t2 = svcGetSystemTick();
+    dlcp_add(1, t2 - t1);
     if (s_call_map) map_census(e);
     u32 frame = gx_render_frame_number();
     // S3D_DL_CACHE=0: decode every list live (debug, bug 36 stale vertex colours)
@@ -1401,6 +1466,7 @@ void GXCallDisplayList(const void* list, u32 nbytes) {
     if (!cache_on) {
         if (s_dlb.e) gx_dlbatch_flush();
         run_uncached(list, nbytes);
+        dlcp_add(6, svcGetSystemTick() - t2);
         return;
     }
 
@@ -1409,6 +1475,7 @@ void GXCallDisplayList(const void* list, u32 nbytes) {
         s_table_full++;
         PROF_COUNT("dl.table_full", 1);
         run_uncached(list, nbytes);
+        dlcp_add(6, svcGetSystemTick() - t2);
         return;
     }
 
@@ -1417,6 +1484,7 @@ void GXCallDisplayList(const void* list, u32 nbytes) {
         e->last_used = frame;
         PROF_COUNT("dl.dynamic", 1);
         run_uncached(list, nbytes);
+        dlcp_add(6, svcGetSystemTick() - t2);
         return;
     }
 
@@ -1426,12 +1494,27 @@ void GXCallDisplayList(const void* list, u32 nbytes) {
         GX_PROF_ZONE("gx.dl.validate");
         hit = same_key && e->valid && e->nbytes == nbytes && e->list_hash == list_hash && arrays_unchanged(e, pre, pre_mask);
     }
+    t3 = svcGetSystemTick();
+    dlcp_add(3, t3 - t2);
     if (hit) {
         e->last_used = frame;
         PROF_COUNT("dl.hits", 1);
-        if (dlb_try(e)) return;
+        if (dlb_try(e)) {
+            dlcp_add(2, svcGetSystemTick() - t3);
+            return;
+        }
+        t4 = svcGetSystemTick();
+        dlcp_add(2, t4 - t3);
         GX_PROF_ZONE("gx.dl.play");
         if (!play_entry(e)) run_uncached(list, nbytes);
+        {
+            u64 play_total = svcGetSystemTick() - t4;
+            u64 g = s_dlcp_play_gather, d = s_dlcp_play_draws;  // This call's (play_entry resets them)
+            dlcp_add(4, g);
+            dlcp_add(5, d);
+            dlcp_add(7, play_total - g - d);
+            s_dlcp_calls++;
+        }
         return;
     }
 

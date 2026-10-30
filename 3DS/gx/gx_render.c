@@ -847,8 +847,7 @@ static void trace_draw_state(const void* indices) {
     else LOG_INFO("gputrace", "  %s", buf);
 }
 
-static void draw_triangles(u32 count, const void* indices) {
-    if (s_discard) {
+static void draw_triangles(u32 count, const void* indices) {    if (s_discard) {
         PROF_COUNT("gx.discarded_draws", 1);
         return;
     }
@@ -1520,20 +1519,59 @@ bool gx_render_can_pipeline(void) { return s_buffers_doubled; }
 
 // Draw pre-decoded vertices from the display list cache (already in linear
 // memory and flushed from the CPU cache)
+// Draw-cached cost split (S3D_DLCALL_PROFILE): per-step ticks for the cached
+// draw paths, reported from gx_dlcache.c's frame window ("drawc" lines)
+static int s_drawc_on;
+static u64 s_drawc_t[4];  // flush, prepare, layout/vsrc, draw
+static u32 s_drawc_calls;
+
+void gx_render_drawc_prof_on(void) { s_drawc_on = 1; }
+
+void gx_render_drawc_report(int frames) {
+    if (!s_drawc_on || frames <= 0) return;
+    double per = 1.0 / (SYSCLOCK_ARM11 / 1000.0) / frames;  // ticks -> ms per frame
+    LOG_DEBUG("drawc", "drawc %.2f ms/frame, %u calls: flush %.2f prepare %.2f layout+vsrc %.2f draw %.2f",
+              (double)(s_drawc_t[0] + s_drawc_t[1] + s_drawc_t[2] + s_drawc_t[3]) * per,
+              (unsigned)s_drawc_calls / (unsigned)frames, (double)s_drawc_t[0] * per, (double)s_drawc_t[1] * per,
+              (double)s_drawc_t[2] * per, (double)s_drawc_t[3] * per);
+    memset(s_drawc_t, 0, sizeof(s_drawc_t));
+    s_drawc_calls = 0;
+}
+
+// The four steps around a cached draw (no-op unless profiling)
+#define DRAWC_BEGIN() u64 dc_t0 = svcGetSystemTick(), dc_t1, dc_t2, dc_t3, dc_t4
+#define DRAWC_STEP(a) (a) = svcGetSystemTick()
+#define DRAWC_END()                                                             \
+    do {                                                                        \
+        if (s_drawc_on) {                                                       \
+            s_drawc_t[0] += dc_t1 - dc_t0;                                      \
+            s_drawc_t[1] += dc_t2 - dc_t1;                                      \
+            s_drawc_t[2] += dc_t3 - dc_t2;                                      \
+            s_drawc_t[3] += dc_t4 - dc_t3;                                      \
+            s_drawc_calls++;                                                    \
+        }                                                                       \
+    } while (0)
+
 void gx_render_draw_cached(const GxOutVertex* verts, const u16* indices, u32 index_count) {
+    DRAWC_BEGIN();
     gx_render_flush();  // Keep draw order with pending decoded geometry
+    DRAWC_STEP(dc_t1);
     gx_render_prepare();
+    DRAWC_STEP(dc_t2);
     use_layout(LAYOUT_STD, 1.0f, 1.0f);
     const void* v = verts;
     bool tess = water_tessellate(false, &v, &indices, &index_count, 1.0f, 1.0f);
     set_vsrc(VS_STD, v, NULL);
+    DRAWC_STEP(dc_t3);
     draw_triangles(index_count, indices);
+    DRAWC_STEP(dc_t4);
     if (tess) water_tess_restore();
     s_drawn = true;
     PROF_COUNT("gx.draw_calls", 1);
     PROF_COUNT("gx.triangles", index_count / 3);
     DRAW_SRC_DRAW(index_count / 3);
     PROF_COUNT("gx.cached_triangles", index_count / 3);
+    DRAWC_END();
     if (s_dumping) LOG_INFO("dump", "  cached draw %lu triangles", (unsigned long)(index_count / 3));
 }
 
@@ -1552,6 +1590,9 @@ void* gx_render_alloc_dynamic(u32 bytes) {
 // posscale: x position scale, y normal scale (s16 x16384, or s8 x64 in the
 // dyn16 buffer), z texcoord scale, w = 2 turns texgen normals by the vertex's
 // position matrix (bug 27, upload_texmtx)
+
+// Draw-cached cost split (S3D_DLCALL_PROFILE): per-step ticks for the cached
+// draw paths, reported from gx_dlcache.c's frame window ("drawc" lines)
 static void upload_posscale(void) {
     C3D_FVUnifSet(GPU_VERTEX_SHADER, s_loc_posscale, s_cur_pos_scale,
                   s_unif_layout == LAYOUT_DYN16 ? 1.0f / 64.0f : 1.0f / 16384.0f, s_cur_tc_scale,
@@ -1574,13 +1615,18 @@ static void use_layout(int layout, float pos_scale, float tc_scale) {
 // fixed-point positions and texcoords, scaled back in the shader
 void gx_render_draw_cached_packed(const GxPackedVertex* verts, const u16* indices, u32 index_count, float pos_scale,
                                   float tc_scale) {
+    DRAWC_BEGIN();
     gx_render_flush();
+    DRAWC_STEP(dc_t1);
     gx_render_prepare();
+    DRAWC_STEP(dc_t2);
     use_layout(LAYOUT_PACKED, pos_scale, tc_scale);
     const void* v = verts;
     bool tess = water_tessellate(true, &v, &indices, &index_count, pos_scale, tc_scale);
     set_vsrc(VS_PACKED, v, NULL);
+    DRAWC_STEP(dc_t3);
     draw_triangles(index_count, indices);
+    DRAWC_STEP(dc_t4);
     if (tess) water_tess_restore();
     s_drawn = true;
     PROF_COUNT("gx.draw_calls", 1);
@@ -1588,6 +1634,7 @@ void gx_render_draw_cached_packed(const GxPackedVertex* verts, const u16* indice
     DRAW_SRC_DRAW(index_count / 3);
     PROF_COUNT("gx.cached_triangles", index_count / 3);
     PROF_COUNT("gx.packed_triangles", index_count / 3);
+    DRAWC_END();
     if (s_dumping) {
         LOG_INFO("dump", "  cached packed draw %lu triangles", (unsigned long)(index_count / 3));
         // Vertex colour range (bug 36: invisible C12 door disc)
@@ -1621,32 +1668,44 @@ void gx_render_draw_cached_packed(const GxPackedVertex* verts, const u16* indice
 
 void gx_render_draw_cached_dynamic16(const GxOutVertex* verts, const GxDyn16Vertex* dyn, const u16* indices,
                                      u32 index_count, float pos_scale) {
+    DRAWC_BEGIN();
     gx_render_flush();
+    DRAWC_STEP(dc_t1);
     gx_render_prepare();
+    DRAWC_STEP(dc_t2);
     use_layout(LAYOUT_DYN16, pos_scale, 1.0f);
     set_vsrc(VS_DYN16, verts, dyn);  // Position and normal from dyn
+    DRAWC_STEP(dc_t3);
     draw_triangles(index_count, indices);
+    DRAWC_STEP(dc_t4);
     s_drawn = true;
     PROF_COUNT("gx.draw_calls", 1);
     PROF_COUNT("gx.triangles", index_count / 3);
     DRAW_SRC_DRAW(index_count / 3);
     PROF_COUNT("gx.cached_dyn_triangles", index_count / 3);
+    DRAWC_END();
 }
 
 // Partially cached list: static attributes from the cache, position and
 // normal from this frame's dynamic buffer (two vertex buffers)
 void gx_render_draw_cached_dynamic(const GxOutVertex* verts, const GxDynVertex* dyn, const u16* indices,
                                    u32 index_count) {
+    DRAWC_BEGIN();
     gx_render_flush();
+    DRAWC_STEP(dc_t1);
     gx_render_prepare();
+    DRAWC_STEP(dc_t2);
     use_layout(LAYOUT_STD, 1.0f, 1.0f);
     set_vsrc(VS_DYN, verts, dyn);
+    DRAWC_STEP(dc_t3);
     draw_triangles(index_count, indices);
+    DRAWC_STEP(dc_t4);
     s_drawn = true;
     PROF_COUNT("gx.draw_calls", 1);
     PROF_COUNT("gx.triangles", index_count / 3);
     DRAW_SRC_DRAW(index_count / 3);
     PROF_COUNT("gx.cached_dyn_triangles", index_count / 3);
+    DRAWC_END();
 }
 
 void gx_render_flush_cpu_caches(void) {

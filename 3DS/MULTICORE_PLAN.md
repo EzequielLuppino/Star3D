@@ -4255,3 +4255,35 @@ not. Sampler (S3D_PROBE=2, cuts, delta 1 phase, 46.5 ms/frame):
 
 Realistic after 1-2: ~30-35 ms (~30 fps) at the cuts config. The cuts are
 env-only; normal play keeps the settings.txt quality.
+
+## 60 fps chase: the 30 fps cap and the DL-call wall (2026-10-30, night)
+
+At the cuts config the PROFILE rtops (per-opcode replay time) showed the
+frame boundary opcode at 22.6 ms/frame — that is the `S3D_FPS_CAP30=1`
+pacing: `C3D_FrameRate(30)` makes the frame-end swap wait for the 30-fps
+cadence even when `C3D_FrameBegin` skips its sync (slow frames). With
+`S3D_FPS_CAP30=0` the boundary drops to ~1.0 ms/frame in the steady state.
+The steady-state frame itself did not move yet (55.6 vs 55.3 ms): the render
+thread's own work is the wall either way, but the cap would have bound any
+gains below 33 ms, so it must stay off for this chase.
+
+With the pacing out of the way the rtops at cuts read:
+
+- gx_dl_call_hashed 43.6 ms/frame @ ~320 calls (**~136 us each**, profile)
+- (state delta) ~4.8, immediate-mode data ~3.6, (matrix block) ~0.5
+
+New instrumentation for the DL-call cost (S3D_DLCALL_PROFILE=1, both builds):
+
+- gx_dlcache.c sums ticks per DL call across its parts (prepare / lookup /
+  dlb / validate / gather / draws / uncached) and reports "dlcall" lines
+  every 120 render-thread frames (gx_dlcache_prof_frame, driven from the
+  render thread's frame boundary — the game thread also runs
+  gx_dlcache_frame_end, so the window counter must not live there).
+- gx_render.c splits each cached draw into flush / prepare / layout+vsrc /
+  draw ("drawc" lines, same window).
+
+First corrected dlcall windows (normal build, cuts, cap off, per frame):
+prepare ~4.8, lookup ~1.5, dlb ~0.4, validate ~0.5, gather ~0.8, draws ~24.8
+(~94 us per call), rest ~0.4. The draw submission inside the cached-DL play
+loop is the single remaining item; the drawc split is queued for the next
+console run.

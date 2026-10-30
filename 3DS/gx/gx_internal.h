@@ -578,6 +578,9 @@ u32 gx_dl_array_key(u32 content_hash, const void* data, u32 size);  // Content +
 void gx_dlcache_deinit(void);
 void gx_dlcache_frame_stats(void);
 void gx_dlcache_frame_end(void);  // Flushes per-entry dynamic buffers
+void gx_dlcache_prof_frame(void); // gx_rec.c: render-thread frame window for S3D_DLCALL_PROFILE
+void gx_render_drawc_prof_on(void);   // gx_render.c: enable the draw-cached cost split
+void gx_render_drawc_report(int frames);  // ... and report one window ("drawc" lines)
 GxOutVertex* gx_dlrec_alloc(DlRecorder* rec, u32 count, u32 index_count, u16** indices_out, u16* base_out,
                             const GxGatherRun* run, u16** pos_idx_out, u16** nrm_idx_out);
 void gx_dlrec_command(DlRecorder* rec, u32 offset, bool splits_draws);
