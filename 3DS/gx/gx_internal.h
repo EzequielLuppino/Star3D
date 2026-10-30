@@ -135,6 +135,34 @@ typedef struct {
     GXColor fog_color;
 } GxPixelState;
 
+// One GX TEV stage (gx_tev.c)
+typedef struct {
+    u8 color_in[4];
+    u8 alpha_in[4];
+    u8 color_op, alpha_op;
+    u8 color_bias, alpha_bias;
+    u8 color_scale, alpha_scale;
+    u8 color_reg, alpha_reg;  // Output registers (GX_TEVPREV..GX_TEVREG2)
+    u8 texcoord, texmap, channel;
+    u8 kcsel, kasel;
+    u8 ras_swap, tex_swap;    // Swap tables applied to rasterized / texture colors
+} GxTevStage;
+
+// TEV and indirect state (was file-local in gx_tev.c)
+typedef struct {
+    GxTevStage stages[GX_MAX_TEVSTAGE];
+    GXColor regs[GX_MAX_TEVREG];       // Initial values of PREV, REG0..REG2
+    GXColor kcolors[GX_MAX_KCOLOR];
+    u8 swap_tables[GX_MAX_TEVSWAP][4]; // Source channel (GX_CH_*) of r, g, b, a
+    u8 num_stages;
+    // Indirect stand-ins (no PICA equivalent; the warp is per vertex)
+    float stage_warp[GX_MAX_TEVSTAGE];
+    u8 stage_ind[GX_MAX_TEVSTAGE], stage_bump_sel[GX_MAX_TEVSTAGE];
+    u8 ind_coord[GX_MAX_INDTEXSTAGE], ind_map[GX_MAX_INDTEXSTAGE];
+    u8 stage_ripple[GX_MAX_TEVSTAGE];
+    u8 num_ind_stages;
+} GxTevState;
+
 enum {
     GX_DIRTY_POSMTX = 1 << 0,  // Position matrices / projection / viewport
     GX_DIRTY_TEXMTX = 1 << 1,  // Texture matrices or texgens
@@ -184,6 +212,12 @@ typedef struct {
 
     GxTexObjData tex[GX_NUM_TEXMAP];  // Bound per texture map
 
+    // Texture copy setup (gx_copy.c): no dirty bits, read at GXCopyTex
+    u16 texcopy_src[4];  // left, top, width, height (EFB pixels)
+    u8 texcopy_dst_fmt;
+
+    GxTevState tev;  // TEV and indirect stage state (gx_tev.c)
+
     u32 dirty;
     u32 posmtx_rows;  // Position matrix rows (0-29) changed since the last upload
     u32 vtx_gen;  // Bumped on any vertex format/array/matrix index change
@@ -214,6 +248,95 @@ void gx_state_changed(u32 dirty_bits);  // Flushes the pending batch first
 // Bumped by every gx_state_changed: a command that leaves it alone changed no
 // render state (PROFILE=1 "unchanged" column of the rtops report)
 extern u32 g_gx_change_seq;
+
+// gx_rec_delta.c: producer-side state deltas (S3D_RT_DELTA). The game thread
+// applies state setters to a shadow copy of g_gx and records one delta per
+// draw instead of one command per setter; the replay applies the delta by
+// copying the changed fields and marking the dirty bits, like the individual
+// setters would have. Matrix loads are batched into one command instead.
+bool gxrec_delta_on(void);       // Set at the frame start from S3D_RT_DELTA
+int gxrec_delta_want(void);      // The raw S3D_RT_DELTA value (0 off, 1 on, 2 = on + verify)
+bool gxrec_delta_switch_pending(void);  // S3D_RT_DELTA changed since the frame start
+bool gxrec_delta_dl_recording(void);  // Inside GXBeginDisplayList (gx_rec.c)
+bool gxrec_delta_verify(void);   // S3D_RT_DELTA value 2: check deltas against the real state (PROFILE=1)
+// Recorder-side bookkeeping (gx_rec.c): vertex descriptors and arrays for the
+// display-list hashes, the scissor for GXGetScissor
+u8 gxrec_delta_vtx_desc(int attr);
+const void* gxrec_delta_array_data(int attr);
+u32 gxrec_delta_array_size(int attr);
+void gxrec_delta_get_scissor(u32 out[4]);
+// Recording side: flush the pending delta / matrix block before another
+// command is recorded (gx_rec.c calls this from gxrec_begin and sync_all),
+// apply a recorded delta or matrix block (replay side), refresh the shadow
+// from the real state, and switch the mode at a frame start
+void gxrec_delta_flush(void);
+void gxrec_delta_apply(const u32* p, u32 words);
+void gxrec_delta_mblk_apply(const u32* p, u32 words);
+void gxrec_delta_refresh(void);
+void gxrec_delta_frame_begin(void);
+// A state setter applied to the shadow (returns false when not in delta mode:
+// the caller records the command). All return whether they handled the call.
+bool gxrec_delta_GXSetVtxAttrFmt(GXVtxFmt vtxfmt, GXAttr attr, GXCompCnt cnt, GXCompType type, u8 frac);
+bool gxrec_delta_GXSetVtxDesc(GXAttr attr, GXAttrType type);
+bool gxrec_delta_GXClearVtxDesc(void);
+bool gxrec_delta_GXSetArray(GXAttr attr, const void* data, u32 size, u8 stride, bool le);
+bool gxrec_delta_GXSetScissor(u32 left, u32 top, u32 wd, u32 ht);
+bool gxrec_delta_GXLoadPosMtxImm(const void* mtx, u32 id);
+bool gxrec_delta_GXLoadNrmMtxImm(const void* mtx, u32 id);
+bool gxrec_delta_GXLoadTexMtxImm(const void* mtx, u32 id, GXTexMtxType type);
+bool gxrec_delta_GXSetProjection(const void* mtx, GXProjectionType type);
+bool gxrec_delta_GXSetViewport(f32 left, f32 top, f32 wd, f32 ht, f32 nearz, f32 farz);
+bool gxrec_delta_GXSetViewportJitter(f32 left, f32 top, f32 wd, f32 ht, f32 nearz, f32 farz, u32 field);
+bool gxrec_delta_GXSetNumTexGens(u8 nTexGens);
+bool gxrec_delta_GXSetNumChans(u8 nChans);
+bool gxrec_delta_GXSetChanCtrl(GXChannelID chan, GXBool enable, GXColorSrc amb_src, GXColorSrc mat_src, u32 light_mask,
+                               GXDiffuseFn diff_fn, GXAttnFn attn_fn);
+bool gxrec_delta_GXSetChanAmbColor(GXChannelID chan, GXColor amb_color);
+bool gxrec_delta_GXSetChanMatColor(GXChannelID chan, GXColor mat_color);
+bool gxrec_delta_GXLoadLightObjImm(GXLightObj* lt_obj, GXLightID light);
+bool gxrec_delta_GXSetBlendMode(GXBlendMode type, GXBlendFactor src_factor, GXBlendFactor dst_factor, GXLogicOp op);
+bool gxrec_delta_GXSetZMode(GXBool compare_enable, GXCompare func, GXBool update_enable);
+bool gxrec_delta_GXSetColorUpdate(GXBool update_enable);
+bool gxrec_delta_GXSetAlphaUpdate(GXBool update_enable);
+bool gxrec_delta_GXSetCullMode(GXCullMode mode);
+bool gxrec_delta_GXSetAlphaCompare(GXCompare comp0, u8 ref0, GXAlphaOp op, GXCompare comp1, u8 ref1);
+bool gxrec_delta_GXSetFog(GXFogType type, f32 startz, f32 endz, f32 nearz, f32 farz, GXColor color);
+bool gxrec_delta_GXSetCopyClear(GXColor clear_clr, u32 clear_z);
+bool gxrec_delta_GXEnableTexOffsets(GXTexCoordID coord, GXBool line_enable, GXBool point_enable);
+bool gxrec_delta_GXSetLineWidth(u8 width, GXTexOffset texOffsets);
+bool gxrec_delta_GXSetPointSize(u8 pointSize, GXTexOffset texOffsets);
+bool gxrec_delta_GXSetNumTevStages(u8 nStages);
+bool gxrec_delta_GXSetTevOrder(GXTevStageID stage, GXTexCoordID coord, GXTexMapID map, GXChannelID color);
+bool gxrec_delta_GXSetTevColorIn(GXTevStageID stage, GXTevColorArg a, GXTevColorArg b, GXTevColorArg c,
+                                 GXTevColorArg d);
+bool gxrec_delta_GXSetTevAlphaIn(GXTevStageID stage, GXTevAlphaArg a, GXTevAlphaArg b, GXTevAlphaArg c,
+                                 GXTevAlphaArg d);
+bool gxrec_delta_GXSetTevColorOp(GXTevStageID stage, GXTevOp op, GXTevBias bias, GXTevScale scale, GXBool clamp,
+                                 GXTevRegID out_reg);
+bool gxrec_delta_GXSetTevAlphaOp(GXTevStageID stage, GXTevOp op, GXTevBias bias, GXTevScale scale, GXBool clamp,
+                                 GXTevRegID out_reg);
+bool gxrec_delta_GXSetTevColor(GXTevRegID id, GXColor color);
+bool gxrec_delta_GXSetTevColorS10(GXTevRegID id, GXColorS10 color);
+bool gxrec_delta_GXSetTevKColor(GXTevKColorID id, GXColor color);
+bool gxrec_delta_GXSetTevKColorSel(GXTevStageID stage, GXTevKColorSel sel);
+bool gxrec_delta_GXSetTevKAlphaSel(GXTevStageID stage, GXTevKAlphaSel sel);
+bool gxrec_delta_GXSetTevOp(GXTevStageID id, GXTevMode mode);
+bool gxrec_delta_GXSetTevSwapMode(GXTevStageID stage, GXTevSwapSel ras_sel, GXTevSwapSel tex_sel);
+bool gxrec_delta_GXSetTevSwapModeTable(GXTevSwapSel table, GXTevColorChan red, GXTevColorChan green,
+                                       GXTevColorChan blue, GXTevColorChan alpha);
+bool gxrec_delta_GXSetIndTexOrder(GXIndTexStageID ind_stage, GXTexCoordID tex_coord, GXTexMapID tex_map);
+bool gxrec_delta_GXSetNumIndStages(u8 nIndStages);
+bool gxrec_delta_GXSetTevDirect(GXTevStageID tev_stage);
+bool gxrec_delta_GXSetTevIndirect(GXTevStageID tev_stage, GXIndTexStageID ind_stage, GXIndTexFormat format,
+                                  GXIndTexBiasSel bias_sel, GXIndTexMtxID matrix_sel, GXIndTexWrap wrap_s,
+                                  GXIndTexWrap wrap_t, GXBool add_prev, GXBool ind_lod, GXIndTexAlphaSel alpha_sel);
+bool gxrec_delta_port_tev_indirect(const char* func, GXTevStageID tev_stage, GXIndTexStageID ind_stage,
+                                   GXIndTexFormat format, GXIndTexBiasSel bias_sel, GXIndTexMtxID matrix_sel,
+                                   GXIndTexWrap wrap_s, GXIndTexWrap wrap_t, GXBool add_prev, GXBool ind_lod,
+                                   GXIndTexAlphaSel alpha_sel);
+bool gxrec_delta_GXLoadTexObj(GXTexObj* obj, GXTexMapID id);
+bool gxrec_delta_GXSetTexCopySrc(u16 left, u16 top, u16 wd, u16 ht);
+bool gxrec_delta_GXSetTexCopyDst(u16 wd, u16 ht, GXTexFmt fmt, GXBool mipmap);
 
 // gx_dlcache.c: display-list batching (S3D_DL_BATCH, DRAWCALL_PLAN.md "Plant
 // batching"). During a replay, consecutive calls of the same cached list whose
@@ -382,6 +505,9 @@ GxOutVertex* gx_render_alloc_vertices(u32 count, u32 index_count, u16** indices_
 
 // gx_tev.c
 void gx_tev_reset(void);
+// Amplitude of a known indirect site (S3D_WATER_WARP etc.), also used by the
+// recorder's shadow (gx_rec_delta.c)
+float gx_tev_warp_for_site(const char* func);
 void gx_tev_build_unit_map(GxUnitMap* map);
 // Whether gx_tev_build_unit_map may split off a projected additive term (bug
 // 32): the render side allows it for opaque depth-writing draws only

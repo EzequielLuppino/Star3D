@@ -10,6 +10,7 @@
 #include "config.h"
 #include "crash.h"
 #include "log.h"
+#include "netsrv_3ds.h"
 #include "profiler.h"
 #include "gx_init.h"
 #include "gx_rec.h"
@@ -174,6 +175,7 @@ int main(void) {
 
     load_env_file();
     touchui_load_settings();  // After env.txt, which wins
+    netsrv_init();
     setup_screen_style();
     if (!cfg_bool("S3D_BOTTOM_HUD", true)) {
         consoleInit(GFX_BOTTOM, &g_debug_console);
@@ -207,11 +209,37 @@ int main(void) {
 
     port_os_init();
 
-    // Game data: the disc is extracted into the RomFS at build time
-    Result rc = romfsInit();
+    // Game data: the disc is extracted into the RomFS at build time. A data
+    // file on the SD card (sdmc:/3ds/star3d/romfs.bin, from out/star3d-romfs.bin)
+    // is preferred: then a code-only .3dsx (the "code" target) runs the full
+    // game, so console tests only transfer the small code image over 3dslink
+    // instead of the several-hundred-MB data blob every time.
+    Result rc = 0xFFFFFFFF;
+    {
+        static const u16 sd_romfs_path[] = u"/3ds/star3d/romfs.bin";
+        FS_Path archPath = { PATH_EMPTY, 1, "" };
+        FS_Path filePath = { PATH_UTF16, sizeof(sd_romfs_path), sd_romfs_path };
+        Handle fd = 0;
+        Result orc = FSUSER_OpenFileDirectly(&fd, ARCHIVE_SDMC, archPath, filePath, FS_OPEN_READ, 0);
+        if (R_SUCCEEDED(orc)) {
+            rc = romfsMountFromFile(fd, 0, "romfs");
+            if (R_FAILED(rc)) {
+                LOG_WARN("init", "SD romfs mount failed (0x%08lX): using the embedded data", (unsigned)rc);
+                FSFILE_Close(fd);
+            } else {
+                LOG_INFO("init", "game data: sdmc:/3ds/star3d/romfs.bin");
+            }
+        } else {
+            LOG_INFO("init", "SD romfs open failed (0x%08lX)", (unsigned)orc);
+        }
+    }
     if (R_FAILED(rc)) {
-        LOG_ERROR("init", "romfsInit failed (0x%08lX): this build has no game data", rc);
-    } else {
+        rc = romfsInit();
+        if (R_FAILED(rc)) {
+            LOG_ERROR("init", "romfsInit failed (0x%08lX): this build has no game data", rc);
+        }
+    }
+    if (R_SUCCEEDED(rc)) {
         // Build-time conversion options (tools/extract_disc.py): the build id
         // only covers the code, this tells data variants apart
         FILE* f = fopen("romfs:/data_info.txt", "r");

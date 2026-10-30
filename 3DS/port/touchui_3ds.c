@@ -598,8 +598,14 @@ static bool in_item_pad(int x, int y) {
     return s_tab == TAB_MAP && x >= IPAD_X && x < IPAD_X + IPAD_W && y >= IPAD_Y && y < IPAD_Y + IPAD_H;
 }
 
+// Bumped by touch input, config changes and animations: touchui_draw skips
+// frames where nothing changed (the render thread pays ~1 ms per frame for
+// the bottom screen, A1C2F0C5)
+static u32 s_ui_gen;
+
 // Remote "flick DX DY" (remote_3ds.c)
 void touchui_remote_flick(int dx, int dy) {
+    s_ui_gen++;
     ipad_flick(dx, dy);
 }
 
@@ -686,6 +692,7 @@ static int s_rtap_x = -1, s_rtap_y;
 void touchui_remote_tap(int x, int y) {
     s_rtap_x = x;
     s_rtap_y = y;
+    s_ui_gen++;
 }
 
 void touchui_input(void) {
@@ -693,6 +700,7 @@ void touchui_input(void) {
     if (s_rtap_x >= 0) {
         int x = s_rtap_x, y = s_rtap_y;
         s_rtap_x = -1;
+        s_ui_gen++;
         if (y < TAB_H) {
             s_tab = x * TAB_COUNT / 320;
             if (s_tab >= TAB_COUNT) s_tab = TAB_COUNT - 1;
@@ -714,6 +722,7 @@ void touchui_input(void) {
         s_ipad_flicked = false;
         s_ipad_x0 = tp.px;
         s_ipad_y0 = tp.py;
+        s_ui_gen++;
         return;
     }
     if (s_ipad_touch) {
@@ -721,6 +730,7 @@ void touchui_input(void) {
             int dx = tp.px - s_ipad_x0, dy = tp.py - s_ipad_y0;
             if (abs(dx) >= FLICK_PX || abs(dy) >= FLICK_PX) {
                 ipad_flick(dx, dy);
+                s_ui_gen++;
                 // Keep flicking without lifting: measure the next one from here
                 s_ipad_flicked = true;
                 s_ipad_x0 = tp.px;
@@ -729,10 +739,14 @@ void touchui_input(void) {
             return;
         }
         s_ipad_touch = false;
-        if (!s_ipad_flicked) ipad_tap(s_ipad_x0, s_ipad_y0);
+        if (!s_ipad_flicked) {
+            ipad_tap(s_ipad_x0, s_ipad_y0);
+            s_ui_gen++;
+        }
         return;
     }
     if (touch_down) {
+        s_ui_gen++;
         if (tp.py < TAB_H) {
             s_tab = tp.px * TAB_COUNT / 320;
             s_confirm_clean = false;
@@ -942,9 +956,42 @@ void touchui_draw(void) {
     static int logged_tab = -1;
     if (s_tab != logged_tab) {
         logged_tab = s_tab;
+        s_ui_gen++;
         LOG_INFO("touchui", "tab %d (%s)", s_tab, s_tab == TAB_SETTINGS ? "settings" : s_tab == TAB_MAP ? "map" : "cheats");
     }
     if (s_failed || !draw) return;
+    // Skip unchanged frames: the touch screen content is static while the
+    // menu is closed, nothing is touched and the item counts and settings
+    // did not change. A safety net redraws every 30 frames.
+    static u32 s_drawn_gen, s_drawn_cfggen, s_drawn_frame;
+    static RingCount s_drawn_counts[RING_COUNTS];
+    static int s_drawn_ncounts;
+    static bool s_drawn_valid;
+    u32 gen = s_ui_gen;
+    if (!cmenu_ready() && !cmenu_closed()) gen++;  // Ring open/close animation
+    if (cfg_gen() != s_drawn_cfggen) gen++;        // Live settings may be listed
+    const RingCount* cur = s_counts[s_counts_pub];
+    int ncur = s_ncounts[s_counts_pub];
+    bool counts_same = s_drawn_valid && ncur == s_drawn_ncounts &&
+                       memcmp(cur, s_drawn_counts, (size_t)ncur * sizeof(RingCount)) == 0;
+    bool skip = s_drawn_valid && gen == s_drawn_gen && counts_same && s_vstick_frames == 0 && s_va_frames == 0 &&
+                prof_frame_count() - s_drawn_frame < 30;
+    if (s_drawn_valid && !skip) {
+        if (gen != s_drawn_gen) PROF_COUNT("touchui.noskip_gen", 1);
+        if (!counts_same) PROF_COUNT("touchui.noskip_counts", 1);
+        if (s_vstick_frames || s_va_frames) PROF_COUNT("touchui.noskip_pulse", 1);
+        if (prof_frame_count() - s_drawn_frame >= 30) PROF_COUNT("touchui.noskip_net", 1);
+    }
+    if (skip) {
+        PROF_COUNT("touchui.skips", 1);
+        return;
+    }
+    s_drawn_valid = true;
+    s_drawn_gen = gen;
+    s_drawn_cfggen = cfg_gen();
+    s_drawn_frame = prof_frame_count();
+    s_drawn_ncounts = ncur;
+    memcpy(s_drawn_counts, cur, (size_t)ncur * sizeof(RingCount));
     WD_PHASE("touchui: ui begin (flush, GPU wait)");
     C3D_RenderTarget* target = gx_ui_begin();
     if (!target) return;

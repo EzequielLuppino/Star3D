@@ -157,25 +157,26 @@ _lib = None
 _opts = None
 
 
-def _worker_init(lib_path, quality, mipmaps, max_size):
+def _worker_init(lib_path, quality, mipmaps, max_size, scale):
     global _lib, _opts
     _lib = ctypes.CDLL(lib_path)
     _lib.tc_convert.restype = ctypes.c_int
     _lib.tc_convert.argtypes = [ctypes.c_char_p, ctypes.c_uint32, ctypes.c_char_p, ctypes.c_uint32,
-                                ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
-    _opts = (quality, mipmaps, max_size)
+                                ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
+    _opts = (quality, mipmaps, max_size, scale)
 
 
 def _convert_one(tex):
     stats = ctypes.create_string_buffer(struct.calcsize(STATS_FORMAT))
     cap = max(len(tex) * 8, 1 << 20)
     out = ctypes.create_string_buffer(cap)
-    n = _lib.tc_convert(tex, len(tex), out, cap, _opts[0], _opts[1], _opts[2], ctypes.cast(stats, ctypes.c_void_p))
+    n = _lib.tc_convert(tex, len(tex), out, cap, _opts[0], _opts[1], _opts[2], _opts[3],
+                        ctypes.cast(stats, ctypes.c_void_p))
     if n < 0:
         cap = -n
         out = ctypes.create_string_buffer(cap)
         stats = ctypes.create_string_buffer(struct.calcsize(STATS_FORMAT))
-        n = _lib.tc_convert(tex, len(tex), out, cap, _opts[0], _opts[1], _opts[2],
+        n = _lib.tc_convert(tex, len(tex), out, cap, _opts[0], _opts[1], _opts[2], _opts[3],
                             ctypes.cast(stats, ctypes.c_void_p))
     st = struct.unpack(STATS_FORMAT, stats.raw)
     psnr = max(st[18:34])  # Only this texture's format slot is set
@@ -183,7 +184,7 @@ def _convert_one(tex):
 
 
 class TexConverter:
-    def __init__(self, lib_path, cache_dir, quality="balanced", mipmaps=True, max_size=1024, jobs=None):
+    def __init__(self, lib_path, cache_dir, quality="balanced", mipmaps=True, max_size=1024, scale=0, jobs=None):
         if quality not in QUALITY_LEVELS:
             raise ValueError(f"TEX_QUALITY must be one of {', '.join(QUALITY_LEVELS)}")
         self.lib_path = lib_path
@@ -191,8 +192,9 @@ class TexConverter:
         self.quality = QUALITY_LEVELS[quality]
         self.mipmaps = 1 if mipmaps else 0
         self.max_size = max_size
+        self.scale = int(scale)
         self.jobs = jobs or os.cpu_count() or 1
-        self.tag = f"q{self.quality}m{self.mipmaps}s{self.max_size}"
+        self.tag = f"q{self.quality}m{self.mipmaps}s{self.max_size}x{self.scale}"
         os.makedirs(cache_dir, exist_ok=True)
         lib = ctypes.CDLL(lib_path)
         if lib.tc_stats_size() != struct.calcsize(STATS_FORMAT):
@@ -225,7 +227,7 @@ class TexConverter:
             print(f"tex_convert: converting {len(todo)} textures ({len(unique) - len(todo)} cached) "
                   f"on {self.jobs} processes", flush=True)
             with multiprocessing.Pool(self.jobs, _worker_init,
-                                      (self.lib_path, self.quality, self.mipmaps, self.max_size)) as pool:
+                                      (self.lib_path, self.quality, self.mipmaps, self.max_size, self.scale)) as pool:
                 for (t, path), (conv, psnr) in zip(todo, pool.imap(_convert_one, [t for t, _ in todo], 16)):
                     os.makedirs(os.path.dirname(path), exist_ok=True)
                     with open(path + ".tmp", "wb") as f:

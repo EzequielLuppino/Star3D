@@ -82,6 +82,10 @@ bool gx_render_eye_reduced(void);
 #define PUBLISH_EVERY 16      // Commands between publishes to the render thread
 #define RELEASE_EVERY 8       // Commands the render thread replays between read index updates
 #define PREFETCH_WORDS 32     // Ring prefetch distance (128 bytes, 4 cache lines)
+// Spin iterations before the render thread sleeps on an empty ring (~4-8 us
+// at 804 MHz): absorbs the producer's per-draw publishes without a LightEvent
+// round trip (rt.idle_spins vs rt.idle_sleeps, PROFILE counters)
+#define RT_IDLE_SPIN 4096
 
 _Static_assert(GXREC_OP_COUNT <= 256, "opcodes must fit in the header byte");
 
@@ -144,16 +148,7 @@ static LightEvent s_ev_work;      // Render thread: commands were published
 static LightEvent s_ev_progress;  // Game thread: the render thread advanced
 static Thread s_thread;
 
-// Recorder-side state for the calls answered on the game thread
-static u32 s_scissor[4];
 static bool s_hud, s_off;
-// Vertex descriptors and arrays as recorded (game thread): which arrays a
-// display list call can read, hashed at record time (gx_dl_call_hashed)
-static u8 s_rec_desc[GX_NUM_ATTR];
-static struct {
-    const void* data;
-    u32 size;
-} s_rec_arr[GX_NUM_ARRAYS];
 static bool s_rec_frame, s_rec_stereo;  // The recording frame is open / stereo
 static struct {
     u8* buf;
@@ -279,6 +274,11 @@ static void dlb_keep_init(void) {
                          strcmp(n, "GXClearVtxDesc") == 0 || strcmp(n, "port_tev_indirect") == 0 ||
                          strcmp(n, "gx_dl_call_hashed") == 0;
     }
+    // The delta and matrix block commands carry only setter changes (the
+    // delta flushes held instances itself when it carries anything but
+    // position matrices)
+    s_dlb_keep[GXREC_OP_DELTA] = 1;
+    s_dlb_keep[GXREC_OP_MBLOCK] = 1;
 }
 
 // gx_dlcache.c, at every flush of held instances: what caused it
@@ -321,13 +321,21 @@ static void run_frame_boundary(const u32* p) {
     if (s_prod_waiting) LightEvent_Signal(&s_ev_progress);
 }
 
-static void execute(u32 op, const u32* p) {
+static void execute(u32 op, const u32* p, u32 words) {
     if (op == GXREC_OP_IMM) {
         gx_vtx_imm_bytes(p + 1, p[0]);
         return;
     }
     if (op == GXREC_OP_FRAME) {
         run_frame_boundary(p);
+        return;
+    }
+    if (op == GXREC_OP_DELTA) {
+        gxrec_delta_apply(p, words);
+        return;
+    }
+    if (op == GXREC_OP_MBLOCK) {
+        gxrec_delta_mblk_apply(p, words);
         return;
     }
     if (!gxrec_replay_generated(op, p)) LOG_ONCE(LOG_LEVEL_ERROR, "rt", "unknown recorded opcode %lu", (unsigned long)op);
@@ -364,7 +372,7 @@ static void replay_until(u32 end) {
 #endif
         s_cur_op = (int)op;
         if (g_dlb_pending && (op >= GXREC_OP_COUNT || !s_dlb_keep[op])) gx_dlbatch_flush();
-        execute(op, &s_ring[r + 1]);
+        execute(op, &s_ring[r + 1], HDR_WORDS(h));
 #if GX_PROFILE_DETAIL
         g_gxrec_replay_op = -1;
 #endif
@@ -412,11 +420,23 @@ static void render_main(void* arg) {
             s_cons_sleeping = true;
             __dmb();
             if ((!s_thread_on || s_pub.idx == s_read.idx) && !s_quit) {
-                ft_ev(FT_R_IDLE_B, 0);
-                LightEvent_Wait(&s_ev_work);
-                ft_ev(FT_R_IDLE_E, 0);
-                // The GPU had time to catch up: empty its queue if it is done
-                C3Dx_Recycle();
+                // The producer publishes at every draw, so when the replay
+                // catches up the next publish usually follows within a few
+                // microseconds. A short spin absorbs it and saves a
+                // LightEvent round trip per draw (~700-800 wake cycles per
+                // hub frame without it); then sleep for real.
+                for (u32 spin = 0; spin < RT_IDLE_SPIN && s_read.idx == s_pub.idx; spin++)
+                    __dmb();
+                if (s_read.idx == s_pub.idx) {
+                    ft_ev(FT_R_IDLE_B, 0);
+                    LightEvent_Wait(&s_ev_work);
+                    ft_ev(FT_R_IDLE_E, 0);
+                    // The GPU had time to catch up: empty its queue if it is done
+                    C3Dx_Recycle();
+                    PROF_COUNT("rt.idle_sleeps", 1);
+                } else {
+                    PROF_COUNT("rt.idle_spins", 1);
+                }
             }
             s_cons_sleeping = false;
             continue;
@@ -452,6 +472,7 @@ static void game_wait_add(u64 t0) {
 // Mode 1, and mode 2 without its thread: replay everything now, here
 static void drain_inline(void) {
     close_imm();
+    gxrec_delta_flush();
     if (s_read.idx == s_w) return;
     PTAG_LEAF(PL_WAIT);
     PROF_ZONE("rt.replay");
@@ -487,6 +508,7 @@ static void sync_all(void) {
         return;
     }
     close_imm();
+    gxrec_delta_flush();
     publish();
     if (s_read.idx != s_w) {
         PROF_ZONE("rt.sync_wait");
@@ -776,6 +798,9 @@ u32* gxrec_begin(u32 op, u32 words) {
     g_ptag_op = (u8)op;  // Probe sampler (port/ptag.h)
     g_ptag_op_calls[op & 0xFF]++;
     if (s_imm) close_imm();
+    // A recorded command draws with the state of the setters before it: flush
+    // the pending delta and matrix block first (no-op outside delta mode)
+    if (op != GXREC_OP_DELTA && op != GXREC_OP_MBLOCK) gxrec_delta_flush();
     reserve(1 + words);
     s_ring[s_w] = HDR(op, words);
     return &s_ring[s_w + 1];
@@ -845,12 +870,7 @@ static inline void rec_emit(const void* data, u32 n) {
 
 static void refresh_shadows(void) {
     s_dd_gen_all++;  // GX ran outside the ring: forget the recorded state
-    memcpy(s_scissor, g_gx.scissor, sizeof(s_scissor));
-    memcpy(s_rec_desc, g_gx.vtx_desc, sizeof(s_rec_desc));
-    for (int a = 0; a < GX_NUM_ARRAYS; a++) {
-        s_rec_arr[a].data = g_gx.arrays[a].data;
-        s_rec_arr[a].size = g_gx.arrays[a].size;
-    }
+    gxrec_delta_refresh();  // Shadow, vertex descriptors, arrays, scissor
     s_hud = gx_hud_active();
     s_off = gx_offscreen_active();
     s_rec_frame = gx_frame_is_active();
@@ -933,6 +953,10 @@ void gxrec_init(void) {
 
 int gxrec_mode(void) { return s_mode; }
 
+// gx_rec_delta.c
+int gxrec_dedup_mode(void) { return s_dd_mode; }
+bool gxrec_delta_dl_recording(void) { return s_dl.on; }
+
 static bool overlap_wanted(void) {
     static int on = -1;
     CFG_LIVE(on, cfg_bool("S3D_RT_OVERLAP", true) ? 1 : 0);
@@ -1014,6 +1038,7 @@ void gxrec_frame_begin(void) {
     CFG_LIVE(want, cfg_int("S3D_RENDER_THREAD", RT_DEFAULT_MODE));
     dd_init();
     CFG_LIVE(s_dd_mode, cfg_int("S3D_RT_DEDUP", 5));
+    bool delta_change = gxrec_delta_switch_pending();
     if (s_dd_on != ((s_dd_mode & 2) != 0)) {
         s_dd_on = (s_dd_mode & 2) != 0;
         s_dd_gen_all++;  // The table may not answer from before the switch
@@ -1028,20 +1053,24 @@ void gxrec_frame_begin(void) {
     if (mode == 2 && !start_thread()) mode = 1;
     if (s_frame_recorded) {
         // The render thread runs the boundary that opens this frame: keep
-        // recording into the ring as it is
+        // recording into the ring as it is. A delta-mode switch drains first
+        // (the pending delta must flush with the old mode, and the shadow
+        // must be refreshed from the real state before recording resumes)
         s_frame_recorded = false;
-        if (mode == s_mode && overlap_wanted()) {
+        if (mode == s_mode && overlap_wanted() && !delta_change) {
             CFG_LIVE(s_prefetch, cfg_bool("S3D_RT_PREFETCH", true));
             s_dl.on = false;
             s_direct_depth = 0;
             s_direct_set = false;
             t_gxrec_direct = false;
+            gxrec_delta_frame_begin();
             return;
         }
         // Switching: finish the previous frame and the boundary first, then
         // continue below with the render thread idle
         sync_all();
     }
+    gxrec_delta_frame_begin();
     if (mode != s_mode) {
         gxrec_forget_answers();
         static const char* const names[] = { "off", "recorded, replayed at the frame end", "render thread on core 2" };
@@ -1171,50 +1200,17 @@ void __wrap_GXCallDisplayList(const void* list, u32 nbytes) {
         PTAG_LEAF(PL_DLHASH);
         h[0] = gx_dl_list_hash(list, nbytes);
         for (int a = GX_VA_POS; a <= GX_VA_TEX7; a++) {
-            if (s_rec_desc[a] < GX_INDEX8 || !s_rec_arr[a].data) continue;
+            u8 desc = gxrec_delta_vtx_desc(a);
+            const void* data = gxrec_delta_array_data(a);
+            if (desc < GX_INDEX8 || !data) continue;
+            u32 size = gxrec_delta_array_size(a);
             mask |= 1u << a;
-            h[n++] = gx_dl_array_key(rec_array_hash(s_rec_arr[a].data, s_rec_arr[a].size), s_rec_arr[a].data,
-                                     s_rec_arr[a].size);
+            h[n++] = gx_dl_array_key(rec_array_hash(data, size), data, size);
         }
     }
     // Bit 31 of the size marks map-block calls (map census, gx_dlcache.c)
     gxrec_put_gx_dl_call_hashed(list, nbytes | (scope == PS_MAP ? 0x80000000u : 0), mask, h);
     publish();  // Draws are where the render thread should get going
-}
-
-void __wrap_GXSetVtxDesc(GXAttr attr, GXAttrType type) {
-    PTAG_LEAF(PL_GXCMD);
-    if (!gxrec_recording()) {
-        __real_GXSetVtxDesc(attr, type);
-        return;
-    }
-    if (attr == GX_VA_NBT) attr = GX_VA_NRM;  // As gx_state.c
-    if (attr < GX_NUM_ATTR) s_rec_desc[attr] = (u8)type;
-    gxrec_put_GXSetVtxDesc(attr, type);
-}
-
-void __wrap_GXClearVtxDesc(void) {
-    PTAG_LEAF(PL_GXCMD);
-    if (!gxrec_recording()) {
-        __real_GXClearVtxDesc();
-        return;
-    }
-    memset(s_rec_desc, GX_NONE, sizeof(s_rec_desc));
-    gxrec_put_GXClearVtxDesc();
-}
-
-void __wrap_GXSetArray(GXAttr attr, const void* data, u32 size, u8 stride, bool le) {
-    PTAG_LEAF(PL_GXCMD);
-    if (!gxrec_recording()) {
-        __real_GXSetArray(attr, data, size, stride, le);
-        return;
-    }
-    GXAttr a = attr == GX_VA_NBT ? GX_VA_NRM : attr;
-    if (a < GX_NUM_ARRAYS) {
-        s_rec_arr[a].data = data;
-        s_rec_arr[a].size = size;
-    }
-    gxrec_put_GXSetArray(attr, data, size, stride, le);
 }
 
 void __wrap_GXBegin(GXPrimitive type, GXVtxFmt vtxfmt, u16 nverts) {
@@ -1278,32 +1274,8 @@ u32 __wrap_GXEndDisplayList(void) {
 
 // Nothing reads the normal matrices: the vertex shader transforms normals with
 // the position matrix (gx_state.c). S3D_RT_DEDUP bit 2 stops recording them
-// (~1,350 per hub frame, 14 words each)
-void __wrap_GXLoadNrmMtxImm(const void* mtx, u32 id) {
-    PTAG_LEAF(PL_GXCMD);
-    if (!gxrec_recording()) {
-        __real_GXLoadNrmMtxImm(mtx, id);
-        return;
-    }
-    if (s_dd_mode & 4) {
-        GX_PROF_COUNT("rec.nrm_mtx_skipped", 1);
-        return;
-    }
-    gxrec_put_GXLoadNrmMtxImm(mtx, id);
-}
-
-void __wrap_GXSetScissor(u32 left, u32 top, u32 wd, u32 ht) {
-    PTAG_LEAF(PL_GXCMD);
-    if (!gxrec_recording()) {
-        __real_GXSetScissor(left, top, wd, ht);
-        return;
-    }
-    s_scissor[0] = left;
-    s_scissor[1] = top;
-    s_scissor[2] = wd;
-    s_scissor[3] = ht;
-    gxrec_put_GXSetScissor(left, top, wd, ht);
-}
+// (~1,350 per hub frame, 14 words each); the generated delta wrapper consults
+// gxrec_delta_GXLoadNrmMtxImm, which also applies that skip when delta is off.
 
 // The scissor only changes through GXSetScissor (display lists cannot set it:
 // gx_vtx.c ignores BP writes) and GXInit (a sync call, which refreshes it)
@@ -1313,10 +1285,12 @@ void __wrap_GXGetScissor(u32* left, u32* top, u32* wd, u32* ht) {
         __real_GXGetScissor(left, top, wd, ht);
         return;
     }
-    if (left) *left = s_scissor[0];
-    if (top) *top = s_scissor[1];
-    if (wd) *wd = s_scissor[2];
-    if (ht) *ht = s_scissor[3];
+    u32 sc[4];
+    gxrec_delta_get_scissor(sc);
+    if (left) *left = sc[0];
+    if (top) *top = sc[1];
+    if (wd) *wd = sc[2];
+    if (ht) *ht = sc[3];
 }
 
 // gx_hud_begin's answer: the bottom screen exists, a frame is open (both fixed

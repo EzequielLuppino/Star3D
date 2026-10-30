@@ -32,23 +32,15 @@
 #include "movie_3ds.h"
 #include "profiler.h"
 
-typedef struct {
-    u8 color_in[4];
-    u8 alpha_in[4];
-    u8 color_op, alpha_op;
-    u8 color_bias, alpha_bias;
-    u8 color_scale, alpha_scale;
-    u8 color_reg, alpha_reg;  // Output registers (GX_TEVPREV..GX_TEVREG2)
-    u8 texcoord, texmap, channel;
-    u8 kcsel, kasel;
-    u8 ras_swap, tex_swap;    // Swap tables applied to rasterized / texture colors
-} tev_stage_t;
+typedef GxTevStage tev_stage_t;
 
-static tev_stage_t s_stages[GX_MAX_TEVSTAGE];
-static GXColor s_regs[GX_MAX_TEVREG];      // Initial values of PREV, REG0..REG2
-static GXColor s_kcolors[GX_MAX_KCOLOR];
-static u8 s_swap_tables[GX_MAX_TEVSWAP][4];  // Source channel (GX_CH_*) of r, g, b, a
-static u8 s_num_stages = 1;
+// TEV state lives in g_gx.tev (gx_internal.h) so the recorder's shadow can
+// mirror it; these names keep the rest of the file unchanged
+#define s_stages g_gx.tev.stages
+#define s_regs g_gx.tev.regs
+#define s_kcolors g_gx.tev.kcolors
+#define s_swap_tables g_gx.tev.swap_tables
+#define s_num_stages g_gx.tev.num_stages
 
 // --- State setters -------------------------------------------------------------
 
@@ -229,19 +221,21 @@ void GXSetTevSwapModeTable(GXTevSwapSel table, GXTevColorChan red, GXTevColorCha
 // slot is offset by analytic waves in the vertex shader (s_stage_warp, the
 // amplitude in texture units; see texwarp in default.v.pica).
 #define IND_MAX_SITES 48
-static float s_stage_warp[GX_MAX_TEVSTAGE];
-static u8 s_num_ind_stages;
+#define s_stage_warp g_gx.tev.stage_warp
+#define s_num_ind_stages g_gx.tev.num_ind_stages
 
 // Bump alpha (GX_ALPHA_BUMPN): a stage with an indirect alpha select reads,
 // as its rasterized alpha, one component of the indirect texture (S = alpha,
 // T = blue, U = green) at the indirect stage's coordinate. The fur shells
 // mask their noise with it, so it is emulated by sampling the indirect
 // texture in a regular unit (see gx_tev_build_unit_map)
-static u8 s_stage_ind[GX_MAX_TEVSTAGE], s_stage_bump_sel[GX_MAX_TEVSTAGE];
-static u8 s_ind_coord[GX_MAX_INDTEXSTAGE], s_ind_map[GX_MAX_INDTEXSTAGE];
+#define s_stage_ind g_gx.tev.stage_ind
+#define s_stage_bump_sel g_gx.tev.stage_bump_sel
+#define s_ind_coord g_gx.tev.ind_coord
+#define s_ind_map g_gx.tev.ind_map
 // Stages set up by setupWaterCausticTev: the water ripple (bug 35) reads the
 // caustic texture at TEX0, so the unit map carries TEX0 in a spare unit
-static u8 s_stage_ripple[GX_MAX_TEVSTAGE];
+#define s_stage_ripple g_gx.tev.stage_ripple
 
 void gx_tev_set_ind_order(int ind_stage, int tex_coord, int tex_map) {
     if (ind_stage < 0 || ind_stage >= GX_MAX_INDTEXSTAGE) return;
@@ -293,7 +287,7 @@ static const struct { const char* func; float amp; int group; } s_warp_sites[] =
 // whose caustic offsets reach ~16 texels of the 320 wide copy)
 int port_ring_baked(void);  // port/caustic_3ds.c
 
-static float warp_for_site(const char* func) {
+float gx_tev_warp_for_site(const char* func) {
     static int water = -1, caustic = -1, water_pct = -1;
     CFG_LIVE(water, cfg_bool("S3D_WATER_WARP", true));
     CFG_LIVE(caustic, cfg_bool("S3D_CAUSTIC_WARP", true));
@@ -363,14 +357,14 @@ void port_tev_indirect(const char* func, GXTevStageID tev_stage, GXIndTexStageID
             funcs[i] = func;
             snprintf(names[i], sizeof(names[i]), "ind.%s", func);
             ids[i] = prof_register_counter(names[i]);
-            amps[i] = warp_for_site(func);
+            amps[i] = gx_tev_warp_for_site(func);
             count++;
         }
     }
     // The amplitudes follow live config changes (S3D_WATER_WARP etc.)
     if (amps_gen != cfg_gen()) {
         amps_gen = cfg_gen();
-        for (int j = 0; j < count; j++) amps[j] = warp_for_site(funcs[j]);
+        for (int j = 0; j < count; j++) amps[j] = gx_tev_warp_for_site(funcs[j]);
     }
     prof_add(ids[i], 1);
     set_stage_warp(tev_stage, amps[i]);

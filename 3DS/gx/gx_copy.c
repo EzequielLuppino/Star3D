@@ -74,8 +74,8 @@ static int s_peekz_next;      // Copy the next frame end writes
 static volatile u32 s_peekz_last_use;  // Frame of the last GXPeekZ
 static LightLock s_peekz_lock = 1;     // Unlocked (LightLock_Init stores 1)
 
-static u16 s_src[4];   // left, top, width, height (EFB pixels)
-static u8 s_dst_fmt;
+#define s_src g_gx.texcopy_src
+#define s_dst_fmt g_gx.texcopy_dst_fmt
 
 void GXSetTexCopySrc(u16 left, u16 top, u16 wd, u16 ht) {
     s_src[0] = left; s_src[1] = top; s_src[2] = wd; s_src[3] = ht;

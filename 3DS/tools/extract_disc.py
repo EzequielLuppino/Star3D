@@ -105,6 +105,7 @@ def conversion_options():
         "texconv": bool(lib) and os.path.isfile(lib),
         "tex_quality": os.environ.get("TEX_QUALITY", "balanced"),
         "tex_mipmaps": os.environ.get("TEX_MIPMAPS", "1") != "0",
+        "tex_scale": int(os.environ.get("TEX_SCALE", "0") or 0),
         "video": video_convert.available() and os.environ.get("VIDEO_CONVERT", "1") != "0",
         "meshsimp": bool(mesh_lib) and os.path.isfile(mesh_lib),
         "poly_reduce": int(os.environ.get("POLY_REDUCE", "50") or 0),
@@ -155,7 +156,8 @@ def convert_textures(files, out_dir):
               "(the Docker build converts them)")
         return
     cache = os.path.join(os.path.dirname(os.path.abspath(out_dir)), "cache", "tex")
-    converter = tex_convert.TexConverter(os.environ["TEXCONV_LIB"], cache, opts["tex_quality"], opts["tex_mipmaps"])
+    converter = tex_convert.TexConverter(os.environ["TEXCONV_LIB"], cache, opts["tex_quality"], opts["tex_mipmaps"],
+                                         scale=opts["tex_scale"])
     report = tex_convert.convert_banks(files, converter, log=lambda m: print("extract_disc: " + m, flush=True))
     with open(os.path.join(os.path.dirname(os.path.abspath(out_dir)), "tex_report.json"), "w") as f:
         json.dump(report, f, indent=1)
@@ -269,8 +271,10 @@ def main():
         poly = (f"{opts['poly_reduce']}% (max error {opts['poly_max_error']}, map colour/uv tolerance "
                 f"{mesh_reduce.MAP_COLOR_TOL}/{mesh_reduce.MAP_UV_TOL:.4f})")
     with open(os.path.join(out_dir, "data_info.txt"), "w", newline="\n") as f:
-        f.write(f"textures {'PICA ' + opts['tex_quality'] if opts['texconv'] else 'GameCube'}, "
-                f"mipmaps {int(opts['tex_mipmaps'])}, polygon reduction {poly}\n")
+        tex = f"PICA {opts['tex_quality']}" if opts["texconv"] else "GameCube"
+        if opts["tex_scale"] > 0:
+            tex += f" 1/{1 << opts['tex_scale']}"
+        f.write(f"textures {tex}, mipmaps {int(opts['tex_mipmaps'])}, polygon reduction {poly}\n")
     with open(stamp_path, "w") as f:
         json.dump(stamp, f)
     print(f"extract_disc: {count} files, {total / 2**20:.1f} MB on disc, {stored / 2**20:.1f} MB in RomFS")

@@ -827,7 +827,7 @@ static int gx_wrap(u8 v) { return v == 1 ? WRAP_REPEAT : v == 2 ? WRAP_MIRROR : 
 
 // Converts one texture (0x60 header + data). Returns the size written to out,
 // 0 to keep the original (unsupported/invalid), or -needed if out is too small.
-int tc_convert(const u8* in, u32 in_size, u8* out, u32 out_cap, int quality, int mipmaps, int max_size,
+int tc_convert(const u8* in, u32 in_size, u8* out, u32 out_cap, int quality, int mipmaps, int max_size, int scale,
                TcStats* st) {
     init_tables();
     if (in_size < 0x60) return 0;
@@ -841,12 +841,29 @@ int tc_convert(const u8* in, u32 in_size, u8* out, u32 out_cap, int quality, int
     // Already converted (magic at the start of the payload)
     if (in_size >= 0x60 + 8 && (u32)(in[0x60] | in[0x61] << 8 | in[0x62] << 16 | (u32)in[0x63] << 24) == PT_MAGIC)
         goto skip;
+    if (scale < 0 || scale > 4) scale = 0;
 
+    u32 orig_w = w, orig_h = h;
     TcOptions opt = { quality, mipmaps, max_size > 0 ? max_size : 1024 };
     u8* rgba = calloc((size_t)w * h, 4);
     if (!gx_decode(in + 0x60, in_size - 0x60, fmt, w, h, rgba)) {
         free(rgba);
         goto skip;
+    }
+    // TEX_SCALE: keep only every 2^scale texels (2x2 box in linear light).
+    // The game header keeps the original size; the PICA header below carries
+    // the reduced one, which is what the renderer uses.
+    if (scale > 0) {
+        u32 sw = w, sh = h;
+        for (int i = 0; i < scale; i++) {
+            u8* hs = half_size(rgba, (int)sw, (int)sh);
+            free(rgba);
+            rgba = hs;
+            sw = sw > 1 ? sw / 2 : 1;
+            sh = sh > 1 ? sh / 2 : 1;
+        }
+        w = sw;
+        h = sh;
     }
     u32 cap = out_cap > 0x60 ? out_cap - 0x60 : 0;
     u8* tmp = malloc((size_t)8 * 1024 * 1024);
@@ -863,15 +880,28 @@ int tc_convert(const u8* in, u32 in_size, u8* out, u32 out_cap, int quality, int
         // Secondary I4 image at payload + imageOffset (see textureInitSecondaryGXTexObj)
         u32 sec_src = 0x60 + img_off;
         if (sec_src < in_size) {
-            u8* srgba = calloc((size_t)w * h, 4);
-            if (gx_decode(in + sec_src, in_size - sec_src, GX_I4, w, h, srgba)) {
+            u8* srgba = calloc((size_t)orig_w * orig_h, 4);
+            if (gx_decode(in + sec_src, in_size - sec_src, GX_I4, orig_w, orig_h, srgba)) {
+                u8* shrunk = srgba;
+                if (scale > 0) {
+                    u32 sw = orig_w, sh = orig_h;
+                    for (int i = 0; i < scale; i++) {
+                        u8* hs = half_size(shrunk, (int)sw, (int)sh);
+                        free(shrunk);
+                        shrunk = hs;
+                        sw = sw > 1 ? sw / 2 : 1;
+                        sh = sh > 1 ? sh / 2 : 1;
+                    }
+                }
                 sec = malloc((size_t)4 * 1024 * 1024);
-                sec_n = build_image(srgba, w, h, GX_I4, gx_wrap(in[0x17]), gx_wrap(in[0x18]), &opt, sec,
+                sec_n = build_image(shrunk, w, h, GX_I4, gx_wrap(in[0x17]), gx_wrap(in[0x18]), &opt, sec,
                                     4 * 1024 * 1024, st);
+                free(shrunk);
                 sec_off = total;
                 total += (sec_n + 31) & ~31u;
+            } else {
+                free(srgba);
             }
-            free(srgba);
         }
         if (!sec_n) {
             free(sec);

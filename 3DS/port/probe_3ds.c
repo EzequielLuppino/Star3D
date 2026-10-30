@@ -41,7 +41,9 @@
 #define PROBE_CHUNK_LINES 64  // One tick read per chunk (2 KB)
 #define LINE 32
 
-extern bool g_perf_lite;  // perf/perf_lite.c
+#ifndef PERF_WRAP
+extern bool g_perf_lite;  // perf/perf_lite.c (PERF_WRAP builds wrap these instead)
+#endif
 extern volatile u32 g_gsp_event_counts[4];  // gx/gx_c3d_queue.c: P3D, PPF, VBlank0, VBlank1
 
 static bool s_on, s_slices;
@@ -381,7 +383,9 @@ void probe_init(void) {
     int mode = cfg_int("S3D_PROBE", 0);
     s_on = mode > 0;
     s_slices = (mode & 1) != 0;
+#ifndef PERF_WRAP
     g_perf_lite = s_on;
+#endif
     if (!s_on) return;
     if (mode & 2) sampler_start();
     if (!s_slices) {

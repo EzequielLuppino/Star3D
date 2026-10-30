@@ -18,7 +18,7 @@ import sys
 # By-value structs: size in 32-bit words
 STRUCTS = {"GXColor": 1, "GXColorS10": 2}
 FLOATS = {"f32", "float"}
-KINDS = {"cmd", "sync", "manual", "wrap"}
+KINDS = {"cmd", "sync", "manual", "wrap", "delta"}
 
 
 class Arg:
@@ -71,7 +71,7 @@ class Entry:
         return ", ".join(a.name for a in self.args)
 
     def has_command(self):
-        return self.kind in ("cmd", "manual")
+        return self.kind in ("cmd", "manual", "delta")
 
 
 def split_args(text):
@@ -183,7 +183,7 @@ def generate(entries):
         h.append("%s __real_%s(%s);" % (e.ret, e.name, e.params()))
     h.append("")
     for e in entries:
-        if e.kind == "manual":
+        if e.kind == "manual" or e.kind == "delta":
             h.append("void gxrec_put_%s(%s);" % (e.name, e.params()))
     h.append("")
     h.append("bool gxrec_replay_generated(u32 op, const u32* p);")
@@ -212,6 +212,22 @@ def generate(entries):
             c.append("        __real_%s(%s);" % (e.name, e.call_args()))
             c.append("        return;")
             c.append("    }")
+            c.extend(encoder_body(e, "    "))
+            c.append("}")
+            c.append("")
+        elif e.kind == "delta":
+            c.append("void __wrap_%s(%s) {" % (e.name, e.params()))
+            c.append("    PTAG_LEAF(PL_GXCMD);")
+            c.append("    if (!gxrec_recording()) {")
+            c.append("        __real_%s(%s);" % (e.name, e.call_args()))
+            c.append("        return;")
+            c.append("    }")
+            c.append("    if (!gxrec_delta_dl_recording() && gxrec_delta_%s(%s)) return;" %
+                     (e.name, e.call_args()))
+            c.append("    gxrec_put_%s(%s);" % (e.name, e.call_args()))
+            c.append("}")
+            c.append("")
+            c.append("void gxrec_put_%s(%s) {" % (e.name, e.params()))
             c.extend(encoder_body(e, "    "))
             c.append("}")
             c.append("")

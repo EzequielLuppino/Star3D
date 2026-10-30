@@ -232,6 +232,14 @@ HOSTCC      ?= $(shell command -v gcc 2>/dev/null || command -v cc 2>/dev/null)
 TEXCONV_LIB := $(if $(HOSTCC),$(BUILD_ROOT)/host/libtexconv.so,)
 TEX_QUALITY ?= balanced
 TEX_MIPMAPS ?= 1
+# Build-time texture downscaling: TEX_SCALE=1 halves every texture (2x2 box in
+# linear light, mip chains start at the reduced size), 2 = quarter. The game
+# keeps the original sizes in its headers; the renderer uses the reduced
+# ones, so textures are smaller on screen but sampling costs a fraction of
+# the texels. 0 = full resolution. The top screen is 240p, so the map
+# textures' full mip 0 is rarely resolved; halving them keeps the look while
+# cutting texture traffic to a quarter.
+TEX_SCALE ?= 1
 # Build-time polygon reduction of models and map blocks (tools/mesh_reduce.py,
 # tools/native/meshsimp.c): POLY_REDUCE = percent of triangles removed per
 # display list (0 = off: full polygon models), POLY_MAX_ERROR = largest
@@ -248,12 +256,12 @@ CONVERT_SCRIPTS := tools/extract_disc.py tools/audio_convert.py tools/tex_conver
                    tools/mesh_reduce.py tools/native/texconv.c tools/native/meshsimp.c
 # Re-extracts when a conversion option changes (the file only changes then)
 CONVERT_OPTIONS := $(BUILD_ROOT)/host/convert_options.txt
-CONVERT_OPTIONS_TEXT := TEX_QUALITY=$(TEX_QUALITY) TEX_MIPMAPS=$(TEX_MIPMAPS) POLY_REDUCE=$(POLY_REDUCE) POLY_MAX_ERROR=$(POLY_MAX_ERROR)
+CONVERT_OPTIONS_TEXT := TEX_QUALITY=$(TEX_QUALITY) TEX_MIPMAPS=$(TEX_MIPMAPS) TEX_SCALE=$(TEX_SCALE) POLY_REDUCE=$(POLY_REDUCE) POLY_MAX_ERROR=$(POLY_MAX_ERROR)
 
 # CIA title (GRAPHICS_PLAN.md 1.3)
 APP_UNIQUE_ID := 0xF5FA0
 
-.PHONY: all clean test code romfs cia mesh-check FORCE
+.PHONY: all clean test code romfs sd-romfs cia mesh-check FORCE
 
 ### Default target ###
 # NO_CIA=1 skips the .cia (faster test builds: makerom repacks the whole
@@ -273,6 +281,18 @@ code: $(BUILD_DIR)/star3d-nodata.3dsx
 
 romfs: $(ROMFS_STAMP)
 
+# Packs the extracted data into one file the game loads from the SD card
+# (sdmc:/3ds/star3d/romfs.bin, main.c): with it, a code-only .3dsx (the
+# "code" target) runs the full game, so console tests only send the small
+# code image over 3dslink. Push out/star3d-romfs.bin to the SD card once.
+sd-romfs: $(ROMFS_STAMP)
+	@mkdir -p $(BUILD_ROOT)/sd
+	@echo "ROMFS $(BUILD_ROOT)/sd/star3d-romfs.bin"
+	@mkromfs3ds $(ROMFS_DIR) $(BUILD_ROOT)/sd/star3d-romfs.bin
+	@mkdir -p ../out
+	@cp $(BUILD_ROOT)/sd/star3d-romfs.bin ../out/star3d-romfs.bin
+	@ls -la ../out/star3d-romfs.bin
+
 # Checks the polygon-reduced model/map banks against the disc (tools/mesh_check.py)
 mesh-check: $(ROMFS_STAMP)
 	$(PYTHON) -I tools/mesh_check.py "$(ISO)" $(ROMFS_DIR)
@@ -284,7 +304,7 @@ $(ROMFS_STAMP): $(ISO) $(CONVERT_SCRIPTS) $(TEXCONV_LIB) $(MESHSIMP_LIB) $(CONVE
 		exit 1; \
 	fi
 	TEXCONV_LIB="$(if $(TEXCONV_LIB),$(abspath $(TEXCONV_LIB)))" TEX_QUALITY=$(TEX_QUALITY) TEX_MIPMAPS=$(TEX_MIPMAPS) \
-		MESHSIMP_LIB="$(if $(MESHSIMP_LIB),$(abspath $(MESHSIMP_LIB)))" POLY_REDUCE=$(POLY_REDUCE) \
+		TEX_SCALE=$(TEX_SCALE) MESHSIMP_LIB="$(if $(MESHSIMP_LIB),$(abspath $(MESHSIMP_LIB)))" POLY_REDUCE=$(POLY_REDUCE) \
 		POLY_MAX_ERROR=$(POLY_MAX_ERROR) $(PYTHON) -I tools/extract_disc.py "$(ISO)" $(ROMFS_DIR)
 
 $(CONVERT_OPTIONS): FORCE

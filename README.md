@@ -99,6 +99,15 @@ functions to `sdmc:/3ds/star3d/Star3D.log`. The timers slow the game down, so us
 build for real frame rates. Switching `PROFILE` rebuilds the affected files
 automatically.
 
+**On-console A/B runs.** `S3D_RT_DELTA_AB=1` (or any of the other `S3D_*_AB`
+switches in `env.txt`) cycles the setting's values automatically once the
+game loads map `S3D_AB_MAP` (default 7, the hub; `-1` = start at boot). Each
+phase lasts 300 frames by default. To switch by wall-clock time instead, add
+`S3D_AB_SECONDS=30`: each phase then lasts 30 seconds, so a one-minute run
+standing still at the same spot covers both values. The log gets one line per
+phase (tag `deltaab` and friends) with the average frame, GPU and scene times
+per value.
+
 **Polygon reduction (on by default).** While the game data is extracted, the
 build simplifies every model and map block (`3DS/tools/mesh_reduce.py` with
 the C simplifier `3DS/tools/native/meshsimp.c`, both run inside the Docker
@@ -114,6 +123,15 @@ make variable (`build.bat POLY_REDUCE=0`, `./build.sh POLY_REDUCE=30`, or
   reduction is lower than the target: about 38% over the whole disc at the
   defaults. Edges that touch the next map block, texture seams and
   bone boundaries are protected to avoid cracks.
+- `TEX_SCALE`: texture downscale factor, a power of two (default 1 = every
+  texture at half resolution, 0 = full resolution, 2 = quarter). The build
+  resamples each texture with a 2x2 box filter in linear light and the mip
+  chains start at the reduced size. The game's headers keep the original
+  sizes, so its logic is unaffected; the renderer uses the reduced ones.
+  The top screen is 240p, where the map textures' full mip 0 is rarely
+  resolved, so the look stays close while texture traffic drops to a
+  quarter. UI and font textures get softer; set `TEX_SCALE=0` for the
+  crispest picture.
 
 Changing either option re-extracts the game data on the next build. The log
 shows the options of the game data in use (`game data: ...` near the top).
@@ -152,6 +170,62 @@ banner instead.
 
 Sound needs the DSP firmware at `sdmc:/3ds/dspfirm.cdc`. Dump it from your
 console with DSP1. Without it the game runs silently.
+
+## Testing on a console over the network
+
+The game data can live on the SD card instead of inside the .3dsx
+(`sdmc:/3ds/star3d/romfs.bin`), so test builds only transfer the code image
+(3.4 MB) instead of the whole data blob (~850 MB) every time:
+
+1. Build the data file once: `make -C 3DS sd-romfs` (needs the ISO) →
+   `out/star3d-romfs.bin`. Push it to `sdmc:/3ds/star3d/romfs.bin` on the
+   console's SD (e.g. with ftpd over FTP). The full `.3dsx`/`.cia` builds
+   still embed the data; the SD file only overrides it when present.
+2. Build the code-only image: `make -C 3DS code` → `out/star3d-nodata.3dsx`
+   (or `3DS/build-docker/us_3ds/star3d-nodata.3dsx` from a Docker build).
+3. On the console, open the Homebrew Launcher and press Y ("Waiting for
+   3dslink...").
+4. Send it: `3dslink -a <console-ip> out/star3d-nodata.3dsx` (in the Docker
+   image: `docker run --rm --network=host -v "$PWD:/workspace" star3d-builder
+   3dslink -a <ip> /workspace/out/star3d-nodata.3dsx`).
+5. The log lands at `sdmc:/3ds/star3d/Star3D.log`; fetch it over FTP. Remote
+   commands in `sdmc:/3ds/star3d/cmd.txt` (port/remote_3ds.c: `set`, `warp`,
+   `warpmap`, `mark` — `mark` also writes a render capture folder) can be
+   staged over FTP before launching.
+
+### In-game network server (S3D_NET_SERVER)
+
+Instead of switching between ftpd and the game, the game itself can serve the
+test files over HTTP. `S3D_NET_SERVER=1` in `env.txt` (port `S3D_NET_PORT`,
+default 8080) starts a tiny server on core 3 (port/netsrv_3ds.c):
+
+- `GET /log` — the log (flushed first), `/log.1` (the rotated earlier part),
+  `/log.prev` (the previous boot's log), `/env.txt`, `/settings.txt`,
+  `/cmd.txt`, `/captures`, `/captures/<dir>`, `/captures/<dir>/<file>`
+- `PUT /cmd.txt`, `/env.txt`, `/settings.txt` — write a file (a cmd.txt PUT
+  is picked up immediately)
+- `PUT /app.3dsx` — a new code image, written to `sdmc:/3ds/star3d.3dsx`
+  where the Homebrew Launcher can also start it directly
+- `PUT /romfs.bin` — new game data (big upload, only when assets change)
+- `GET /restart` — relaunch the app with the `PUT /app.3dsx` build through
+  Rosalina's hb:ldr service (the mechanism hbmenu itself uses), so a full
+  update cycle is hands-off: upload the new build, restart, and the game
+  comes back running the new code with the same env.txt. The exit path calls
+  socExit() so the listening socket is released and the fresh boot's bind()
+  succeeds immediately (bind also retries indefinitely if a port lingers).
+
+Console gotchas (both cost debugging time):
+
+- hbmenu shows a `/3ds/star3d/` **folder** as its own entry. Keep exactly one
+  `star3d.3dsx` at `/3ds/` root and no `.3dsx` inside the data folder, or the
+  wrong (old) build gets launched from the folder entry.
+- The ftpd app can serve cached file contents: after an FTP upload, the
+  download-back may show the new bytes while the real SD still holds the old
+  ones until ftpd exits. Verify critical uploads by mounting the SD on a PC,
+  or prefer the in-game server / direct SD writes.
+
+Everything the server exposes is off by default; only the env entries above
+turn it on, so normal builds do not run it.
 
 ## Controls
 
@@ -200,10 +274,13 @@ camera on and logging off. The 3D options are "3D: faster (fewer effects)"
 "3D: depth follows Fox" (the screen depth tracks Fox).
 
 The renderer and debug options are hidden and keep their defaults: render
-thread on core 2, far animation LOD strong, back-face culling on, per-pixel
-lighting on, fur shading/wind/layer budget on, water ripples and caustics
-on, heat haze on, texture LOD 0, lean shaders "fast math" and the debug mip
-level off. `S3D_MENU_ADVANCED=1` in `env.txt` lists them again.
+thread on core 2, state deltas on, far animation LOD strong, back-face culling
+on, per-pixel lighting on, fur shading/wind/layer budget on, water ripples and
+caustics on, heat haze on, texture LOD 0, lean shaders "fast math" and the
+debug mip level off. `S3D_MENU_ADVANCED=1` in `env.txt` lists them again.
+`S3D_RT_DELTA=0` switches the state deltas off (the old per-setter recording),
+and `S3D_RT_DELTA=2` in a PROFILE build records every setter as well and
+checks each delta against the replayed state, logging any mismatch.
 
 Changes are kept in `settings.txt`. A `settings.txt` from a build before
 these defaults is ignored once. For bug reports, turn Logging on (or put

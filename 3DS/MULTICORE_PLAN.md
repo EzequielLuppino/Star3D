@@ -2927,8 +2927,7 @@ colours) in the compact phases.
 #### Result (A1C2F0C5, HW 2026-10-16): the compact filter doesn't help
 
 Log: perf/hwlogs/A1C2F0C5_dedupab_compact.log. Table:
-`python -I tmp_scripts/compact_hw.py <log>`. Env: `S3D_PROBE=2`,
-`S3D_RT_DEDUP_AB=300`, `S3D_BENCH=0`, hub, 252 s. Clean run: 5 cycles of 7
+`python -I tmp_scripts/compact_hw.py <log>`. Env: `S3D_PROBE=2`,`S3D_RT_DEDUP_AB=300`, `S3D_BENCH=0`, hub, 252 s. Clean run: 5 cycles of 7
 and 23 and 4 of 5, every phase 270 frames, no gaps.
 
 Averages per value (ms per frame):
@@ -2998,6 +2997,72 @@ What it means:
    filter 0/full) to explain the ~450 cycles per command. That decides
    whether a cheap filter that runs before encoding is possible. It would
    give back the render thread's ~6 ms.
+
+### State deltas (S3D_RT_DELTA, gx/gx_rec_delta.c)
+
+The A1C2F0C5 result left the render thread's `gx_dl_call_hashed` replay
+(~45 us per call) as the biggest block in the frame: ~40-50 recorded setter
+commands surround every draw, and the replay dispatches each one through the
+real setter even when nothing changes. The record-time filter could not drop
+them (it cost the game thread more than it saved), and the dedup census says
+96% of setups repeat a material seen before.
+
+Instead of recording one command per setter, the game thread now keeps a
+shadow copy of the GX state (`s_shadow`, gx_rec_delta.c) and applies each
+setter to it: compare, write the field, mark the changed region and the dirty
+bits. Before the next draw (or any recorded command) the pending changes go
+into the ring as one `GXREC_OP_DELTA` packet: a 64-bit region bitmap, the
+invalidate-layouts flag, the dirty-bit union, the `vtx_gen` bump count and
+the changed regions' bytes. The replay copies the regions into `g_gx`,
+invalidates the vertex layouts if asked, flushes the display-list holds and
+the pending immediate-mode batch (exactly where `gx_state_changed` would
+have), then marks the dirty bits; `gx_render_prepare` runs unchanged at the
+next draw. Matrix loads are batched the same way into one
+`GXREC_OP_MBLOCK` packet whose replay calls the real load functions, so the
+GameCube's FIFO semantics (compare and skip unchanged values) stay intact.
+
+- **Order:** a state setter flushes a pending matrix block first and a
+  matrix load flushes a pending delta first, so packets keep the stream
+  order. The order matters for the display-list batch holds, which draw
+  with the state in place at the flush point.
+- **Shadow hazards:** display lists may write CP/XF registers
+  (gx_vtx.c `handle_cp` / `xf_write`) behind the recorder's back. Fields a
+  list could change are handled so the shadow never guesses: vertex
+  descriptors, formats and arrays are always included (no value compare,
+  and `vtx_gen` bumps are summed), while `GXSetCurrentMtx` and
+  `GXSetTexCoordGen2` stay recorded commands. TEV, pixel, texture, light
+  and projection state cannot be written by lists (BP writes are ignored),
+  so they are safe to compare against the shadow. Matrices always go
+  through the block, which replays the real setters.
+- **Shadow refresh:** at frame starts and after direct sections the shadow
+  is copied from `g_gx` (gxrec_delta_refresh, refresh_shadows). A
+  `S3D_RT_DELTA` change at a frame start drains first, so the pending delta
+  flushes with the old mode.
+- **Regions:** the shadow covers `GxState` plus the TEV state, which moved
+  from gx_tev.c statics into `g_gx.tev` (gx_internal.h), and the texture
+  copy setup from gx_copy.c statics (`texcopy_src` / `texcopy_dst_fmt`).
+  The region table uses `offsetof`, so a field move fails the build, and a
+  one-time check at boot verifies every region has real bytes (a missing
+  entry once shipped as a zero-sized copy that silently dropped texture and
+  light loads; the check logs an error and disables the delta path instead).
+- **Verify mode** (`S3D_RT_DELTA=2`, PROFILE=1): every delta setter also
+  records the real command; the replay compares each delta packet's payload
+  against the state the recorded commands produced and logs mismatches
+  (`rec.delta_verify_fail`, "delta verify: region %d differs").
+- `S3D_RT_DELTA` default 1 (2 = verify), 0 = the old per-setter recording.
+  `S3D_RT_DELTA_AB` cycles 1 / 0 (tag `deltaab`); with `S3D_AB_SECONDS=N`
+  the phases last N wall-clock seconds instead of frames, so a short run at
+  one spot covers both values. Counters:
+  `rec.delta_flushed`, `rec.delta_applied`, `rec.delta_bytes`,
+  `rec.mblk_applied`, `rec.mblk_matrices`, `rec.mblk_pos`. In delta mode
+  the `S3D_RT_DEDUP` filter only sees the few remaining recorded commands,
+  and each delta packet resets its memory (gxrec_delta.c, by design).
+
+Expected: the render thread stops paying ~40-100 setter dispatches per
+draw; the game thread records far fewer commands (less ring traffic and
+fewer space waits). The cost moves to the shadow apply on the game thread
+(compare + field write, the same work the setters did in mode 0) and the
+delta apply on the render thread (one memcpy per draw).
 
 ### Render-thread steps (build 5C202467, HW pending)
 

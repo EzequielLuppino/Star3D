@@ -9,7 +9,8 @@
 //   gyro YAW PITCH [N] turn the console at YAW / PITCH degrees per second for N
 //                   frames (default 30), right and up positive (gyro aiming)
 //   press KEYS [N]  hold buttons for N frames (default 6). KEYS: A B X Y S(tart)
-//                   L R Z U D < > (d-pad), e.g. "press A" or "press ZA 10"
+//                   C(select) L R Z U D < > (d-pad), e.g. "press A" or "press ZA 10"
+//                   ("press SC" quits the game, same as hardware START+SELECT)
 //   wait N          do nothing for N frames
 //   set NAME VALUE  change a live setting (cfg_set), e.g. "set S3D_GPU_BLUR 0"
 //   warpmap N       warpToMap(N) with a WARPTAB.bin index (hex ok, e.g. 0x35)
@@ -41,7 +42,7 @@ extern void* gSkyState;  // SkyState (include/main/sky_state.h), timeOfDay at 0x
 void* Obj_GetPlayerObject(void);
 
 #define CMD_FILE "sdmc:/3ds/star3d/cmd.txt"
-#define POLL_FRAMES 30
+#define POLL_FRAMES 240  // SD polls: first at frame 30, then every 240
 #define MAX_CMDS 64
 
 u16 remote_pad_buttons;
@@ -50,12 +51,14 @@ s8 remote_stick[2], remote_cstick[2];
 static char s_cmds[MAX_CMDS][64];
 static int s_count, s_next;
 static int s_wait, s_poll;
+static bool s_poll_force;  // remote_poll_now(): poll this frame
 
 static u16 parse_keys(const char* s) {
     static const struct { char c; u16 bit; } keys[] = {
         { 'A', PAD_BUTTON_A }, { 'B', PAD_BUTTON_B }, { 'X', PAD_BUTTON_X }, { 'Y', PAD_BUTTON_Y },
         { 'S', PAD_BUTTON_START }, { 'L', PAD_TRIGGER_L }, { 'R', PAD_TRIGGER_R }, { 'Z', PAD_TRIGGER_Z },
         { 'U', PAD_BUTTON_UP }, { 'D', PAD_BUTTON_DOWN }, { '<', PAD_BUTTON_LEFT }, { '>', PAD_BUTTON_RIGHT },
+        { 'C', PAD_BUTTON_SELECT },
     };
     u16 bits = 0;
     for (; *s && *s != ' '; s++)
@@ -69,9 +72,27 @@ static void read_file(void) {
     if (!f) return;
     char line[64];
     s_count = s_next = 0;
+    bool swallow = false;  // Skipping the rest of a long comment line
     while (s_count < MAX_CMDS && fgets(line, sizeof(line), f)) {
+        bool endline = strchr(line, '\n') != NULL;
+        if (swallow) {
+            if (endline) swallow = false;
+            continue;
+        }
+        if (line[0] == '#') {
+            // fgets() returns 63-char chunks, so an over-long comment's tail
+            // would otherwise become a bogus command: swallow it
+            if (!endline) swallow = true;
+            continue;
+        }
+        if (!endline) {
+            // Over-long command: keep the first chunk, swallow the rest
+            snprintf(s_cmds[s_count++], sizeof(s_cmds[0]), "%s", line);
+            swallow = true;
+            continue;
+        }
         line[strcspn(line, "\r\n")] = 0;
-        if (line[0] && line[0] != '#') snprintf(s_cmds[s_count++], sizeof(s_cmds[0]), "%s", line);
+        if (line[0]) snprintf(s_cmds[s_count++], sizeof(s_cmds[0]), "%s", line);
     }
     fclose(f);
     remove(CMD_FILE);
@@ -194,6 +215,8 @@ static void apply_env_tod(void) {
     LOG_INFO("remote", "S3D_TOD: time of day set to %02d:%02d", tod / 3600 % 24, tod / 60 % 60);
 }
 
+void remote_poll_now(void) { s_poll_force = true; }
+
 void remote_frame(void) {
     if (s_poll == 0) apply_env_tod();
     if (s_wait > 0 && --s_wait > 0) return;
@@ -203,8 +226,16 @@ void remote_frame(void) {
         run(s_cmds[s_next++]);
         if (s_wait > 0) return;
     }
-    if (++s_poll >= POLL_FRAMES) {
-        s_poll = 0;
-        read_file();
+    // The SD poll is rare: an fopen here stalls the frame (asset streaming
+    // shares the card, and the stall shows as a bottom-screen flicker in the
+    // hub). First poll at frame 30 (the boot drive script), then every 240
+    // frames; the net server triggers an instant poll after a PUT /cmd.txt.
+    bool poll = s_poll_force;
+    s_poll_force = false;
+    if (++s_poll == 30) poll = true;
+    if (s_poll >= POLL_FRAMES) {
+        poll = true;
+        s_poll = 31;  // Skip the == 30 trip, poll again in POLL_FRAMES frames
     }
+    if (poll) read_file();
 }

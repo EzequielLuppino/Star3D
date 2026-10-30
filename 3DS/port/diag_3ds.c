@@ -236,6 +236,21 @@ static void ab_map_loaded(int map_id);
 
 void diag_map_loaded(int map_id) {
     ab_map_loaded(map_id);
+    // S3D_LOG_MAP=N: keep only warnings/errors until map N loads, then log
+    // fully again (default -1: leave the logging switch alone)
+    {
+        static int log_map = -2;
+        if (log_map == -2) log_map = cfg_int("S3D_LOG_MAP", -1);
+        if (log_map >= 0) {
+            bool on = map_id == log_map;
+            static bool last = true;
+            if (on != last) {
+                last = on;
+                log_set_verbose(on);
+                LOG_INFO("diag", "S3D_LOG_MAP=%d: logging %s on map %d", log_map, on ? "on" : "off", map_id);
+            }
+        }
+    }
     if (s_sweep_map == -2) s_sweep_map = cfg_int("S3D_GPU_SWEEP", -1);
     if (s_sweep_map < 0 || map_id != s_sweep_map || s_sweep_phase >= 0 || s_sweep_countdown) return;
     s_sweep_countdown = SWEEP_DELAY;
@@ -331,15 +346,19 @@ static const struct {
     // Joint texture matrices (bug 27, patches/main/objprint_dolphin.c.sed): loaded
     // (the fix) / dropped as before. The price of the extra TEXMTX loads
     { "S3D_JOINT_TEXMTX_AB", "S3D_JOINT_TEXMTX", "jtexab", "joint texmtx", 2, { 1, 0 } },
+    // State deltas (gx/gx_rec_delta.c): setters recorded as deltas / one command each
+    { "S3D_RT_DELTA_AB", "S3D_RT_DELTA", "deltaab", "delta", 2, { 1, 0 } },
 };
 void lod_frame(void);  // lod_3ds.c
 void lod_census_request(int delay);
 static int s_ab_test = -1;    // Index in k_ab_tests, -2 = none, -1 = not read yet
 static int s_ab_frames;       // Frames per phase
+static int s_ab_seconds = -1; // S3D_AB_SECONDS: wall-clock seconds per phase (0 = frames)
 static int s_ab_map = -2;     // S3D_AB_MAP; -2 = not read yet
 static int s_ab_wait = -1;    // Frames until the start; -1 = waiting for the map
 static int s_ab_count, s_ab_phase, s_ab_n;
 static u64 s_ab_tick;
+static u64 s_ab_phase_tick;   // Tick the current phase started (time-based phases)
 static double s_ab_frame_ms, s_ab_gpu_ms, s_ab_scene_ms, s_ab_own_ms;
 
 static void ab_map_loaded(int map_id) {
@@ -351,6 +370,7 @@ static void ab_frame(void) {
     if (s_ab_test == -1) {
         s_ab_test = -2;
         if (s_ab_map == -2) s_ab_map = cfg_int("S3D_AB_MAP", 7);
+        if (s_ab_seconds < 0) s_ab_seconds = cfg_int("S3D_AB_SECONDS", 0);
         for (int i = 0; i < (int)(sizeof(k_ab_tests) / sizeof(k_ab_tests[0])); i++) {
             int n = cfg_int(k_ab_tests[i].env, 0);
             if (n <= 0) continue;
@@ -364,9 +384,14 @@ static void ab_frame(void) {
             int vl = 0;
             for (int v = 0; v < k_ab_tests[i].n; v++)
                 vl += snprintf(vals + vl, sizeof(vals) - vl, "%s%d", v ? " / " : "", k_ab_tests[i].vals[v]);
-            LOG_INFO(k_ab_tests[i].tag, "%s A/B: %d frames per phase, %s %s (%d values), starts %d frames "
-                     "after map %d loads; stand still", k_ab_tests[i].label, s_ab_frames, k_ab_tests[i].var, vals,
-                     k_ab_tests[i].n, AB_START_DELAY, s_ab_map);
+            if (s_ab_seconds > 0)
+                LOG_INFO(k_ab_tests[i].tag, "%s A/B: %d s per phase, %s %s (%d values), starts %d frames "
+                         "after map %d loads; stand still", k_ab_tests[i].label, s_ab_seconds, k_ab_tests[i].var, vals,
+                         k_ab_tests[i].n, AB_START_DELAY, s_ab_map);
+            else
+                LOG_INFO(k_ab_tests[i].tag, "%s A/B: %d frames per phase, %s %s (%d values), starts %d frames "
+                         "after map %d loads; stand still", k_ab_tests[i].label, s_ab_frames, k_ab_tests[i].var, vals,
+                         k_ab_tests[i].n, AB_START_DELAY, s_ab_map);
             break;
         }
     }
@@ -379,6 +404,7 @@ static void ab_frame(void) {
             lod_census_request(cfg_int("S3D_OBJ_CENSUS", 0));
             s_ab_count = s_ab_n = 0;
             s_ab_tick = 0;
+            s_ab_phase_tick = svcGetSystemTick();
         }
         return;
     }
@@ -392,7 +418,13 @@ static void ab_frame(void) {
     }
     s_ab_tick = now;
     if (s_ab_count == AB_SETTLE) probe_sample_mark(NULL);
-    if (++s_ab_count < s_ab_frames) return;
+    s_ab_count++;
+    // Phase end: N frames, or (S3D_AB_SECONDS) N wall-clock seconds once the
+    // settle frames are past
+    bool phase_done = s_ab_count >= s_ab_frames;
+    if (s_ab_seconds > 0 && s_ab_count >= AB_SETTLE)
+        phase_done = now - s_ab_phase_tick >= (u64)s_ab_seconds * SYSCLOCK_ARM11;
+    if (!phase_done) return;
     const char* tag = k_ab_tests[s_ab_test].tag;
     int val = k_ab_tests[s_ab_test].vals[s_ab_phase];
     if (s_ab_n) {
@@ -407,6 +439,11 @@ static void ab_frame(void) {
     cfg_set(k_ab_tests[s_ab_test].var, k_ab_tests[s_ab_test].vals[s_ab_phase]);
     s_ab_count = s_ab_n = 0;
     s_ab_frame_ms = s_ab_gpu_ms = s_ab_scene_ms = s_ab_own_ms = 0.0;
+    s_ab_phase_tick = now;
+    // Phase start marker: makes every transition visible in the log even when
+    // the phase-end line itself is lost (e.g. a capture stall in the same frame)
+    LOG_INFO(tag, "phase %d of %d starts: %s=%d", s_ab_phase + 1, k_ab_tests[s_ab_test].n,
+             k_ab_tests[s_ab_test].var, k_ab_tests[s_ab_test].vals[s_ab_phase]);
 }
 
 void diag_frame(void) {

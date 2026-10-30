@@ -13,6 +13,7 @@
 #include "gx_rec.h"
 #include "gx_init.h"
 #include "log.h"
+#include "netsrv_3ds.h"
 #include "port_3ds.h"
 #include "watchdog.h"
 
@@ -360,6 +361,7 @@ void probe_shutdown(void);  // probe_3ds.c
 
 void port_shutdown_and_exit(int code) {
     LOG_INFO("os", "shutting down (code %d)", code);
+    netsrv_shutdown();  // socExit: release the listener for the next boot
     watchdog_stop();
     probe_shutdown();  // S3D_PROBE sampler thread (probe_3ds.c)
     gxrec_shutdown();  // Render thread off before the GPU state goes away

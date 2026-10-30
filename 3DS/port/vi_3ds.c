@@ -12,6 +12,8 @@
 #include "gx_internal.h"
 #include "gx_rec.h"
 #include "log.h"
+#include "netsrv_3ds.h"
+#include "remote_3ds.h"
 #include "worker.h"
 #include "port_3ds.h"
 #include "profiler.h"
@@ -148,8 +150,21 @@ void VIWaitForRetrace(void) {
 
     WD_PHASE("vi: input / touch UI");
     hidScanInput();
-    if ((hidKeysHeld() & (KEY_START | KEY_SELECT)) == (KEY_START | KEY_SELECT)) {
-        LOG_INFO("vi", "START+SELECT pressed, exiting");
+    // Hardware or remote (cmd.txt "press SC") START+SELECT quits. The remote
+    // pad uses dolphin PAD bits (SELECT = PAD_BUTTON_SELECT), hardware KEY_*.
+    {
+        u32 hw = hidKeysHeld() & (KEY_START | KEY_SELECT);
+        u16 rp = remote_pad_buttons & (PAD_BUTTON_START | PAD_BUTTON_SELECT);
+        if (hw == (KEY_START | KEY_SELECT) || rp == (PAD_BUTTON_START | PAD_BUTTON_SELECT)) {
+            LOG_INFO("vi", "START+SELECT pressed, exiting");
+            port_shutdown_and_exit(0);
+        }
+    }
+    // Net server restart (GET /restart): relaunch the app with the new build
+    // (PUT /app.3dsx) through Rosalina's hb:ldr, then exit
+    if (netsrv_restart_requested()) {
+        LOG_INFO("vi", "restart requested over the network, exiting");
+        netsrv_relaunch_app();
         port_shutdown_and_exit(0);
     }
     port_controls_frame();  // Gyro, C-stick camera (controls_3ds.c)
