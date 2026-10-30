@@ -4208,3 +4208,50 @@ explains the 4.6 ms gap between the two "overlap on" attract segments.
 
 Superseded on 2026-10-14 by the build steps in "Recommended 3-core design".
 Step 0 is done (results above).
+
+## 60 fps chase: cuts baseline and the render-thread wall (2026-10-30)
+
+Console loop (in-game HTTP server + hb:ldr relaunch, README "In-game network
+server") measured the hub spawn with the A/B harness.
+
+**Cuts config** (env.txt: S3D_OBJ_DIST=30, S3D_OBJ_MINPX=45, S3D_PLANTS=0,
+S3D_SHADOWS=0, S3D_FUR_MODE=0, S3D_GRASS_BUDGET=0, S3D_GPU_BLUR=0):
+
+| config | frame | GPU | sceneRender |
+|---|---|---|---|
+| defaults | 56.9 ms | 28.1 ms | 29.3 ms |
+| obj dist 75% | 53.2 ms | 24.8 ms | 25.0 ms |
+| obj dist 50% | 49.0 ms | 20.7 ms | 20.5 ms |
+| full cuts | 45.8 ms | 15.0 ms | 17.4 ms |
+
+The GPU is below the 16.7 ms target at the cuts config; the render thread is
+not. Sampler (S3D_PROBE=2, cuts, delta 1 phase, 46.5 ms/frame):
+
+- Game thread waits **20.4 ms/frame** on the render thread fence; its own work
+  is ~26 ms (logic 4.2, mapBlock game 4.0, objRender game 1.3, scene 2.7,
+  outside game 2.7, glow 0.7, rcp/lights 0.3, plus recording).
+- Render thread ~46.5 ms: **gx.dl.play 24.2** (cached-DL segment replay +
+  gather), then dl.batch 1.6, state delta 1.5, c3d.uniforms 1.5, dl.lookup
+  1.3, gx.draw 1.3, tev.apply 1.0, immediate 0.9, tev.texmtx 0.9, ~7 ms of
+  small items incl. 2.6 idle.
+- Recorder per-op: state delta 679/frame @ 5.3 us, gx_dl_call_hashed
+  303/frame @ 8.2 us, GXSetTexCoordGen2 551/frame @ 3.1 us (excluded from
+  deltas on purpose: DLs may write CP/XF state behind the recorder's back),
+  matrix block 224/frame @ 7.0 us, GXBegin 193/frame @ 1.3 us.
+- Delta 1 vs 0 at the cuts config: 46.5 vs 48.9 ms (the delta keeps paying).
+
+**Next targets, ranked:**
+
+1. `gx.dl.play`'s per-op cost (~5.5 us x ~4400 ops = the 24 ms). The replay
+   of a cached DL re-runs the translation of its commands; per-op dispatch and
+   the state-apply path are the cost. Cut per-op cost before cutting op count.
+2. GXSetTexCoordGen2 (1.7 ms game + ~3 ms RT replay): either refresh the
+   delta shadow after every DL play so the setter can join the delta path, or
+   make the wrapper cheaper.
+3. Game-side glow: 1388 immediate-mode calls per frame in the glow passes.
+4. If 1-3 land, the game thread's own ~26 ms (logic/traversal ~15 ms +
+   recording ~10 ms) becomes the next wall, and 60 fps would still need the
+   game code itself under 16.7 ms — beyond incremental cuts.
+
+Realistic after 1-2: ~30-35 ms (~30 fps) at the cuts config. The cuts are
+env-only; normal play keeps the settings.txt quality.

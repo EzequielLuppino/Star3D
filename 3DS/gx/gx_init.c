@@ -731,7 +731,13 @@ static void gpu_pipeline_update(void) {
 // thread reads it and passes it to gx_frame_begin_slider, so its answers
 // (stereo, offscreen passes) agree with the frame the render thread opens
 float gx_frame_slider(void) {
-    return right_target ? osGet3DSliderState() : 0.0f;
+    if (!right_target) return 0.0f;
+    // S3D_STEREO_FORCE=1: render stereo regardless of the physical slider
+    // (console A/B tests; the slider stays where it is)
+    static int force = -1;
+    if (force < 0) force = cfg_int("S3D_STEREO_FORCE", 0);
+    if (force) return 1.0f;
+    return osGet3DSliderState();
 }
 
 void gx_frame_begin(void) {
