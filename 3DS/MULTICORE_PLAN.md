@@ -4320,3 +4320,20 @@ A warp-entry tick now separates entry+warp-check time from the tessellation
 body; if the body owns the 25 ms, the 6 active draws are tessellating huge
 meshes and the fix is capping/merging the water geometry instead of micro-
 optimizing the call path.
+
+## 60 fps chase: 30 fps with the 3D effect reached (2026-10-30)
+
+The drawc phase split showed the water cost is the tessellation body (vert
+phase 18.98 ms of 19.6; ~9.5k output verts from 211 input tris at tess
+n ~7-8; ~535 cycles/vertex of lerp + caustic offsets). S3D_WATER_TESS=0 in
+the cuts env removes it (the env change alone, no build): delta 1 = 27.4 ms,
+GPU 20.9 ms (~36.5 fps, CPU-bound again). Steady-state drawc 6.6 ms (water
+0.38, draw 5.7), dlcall 17.4 ms (prepare 5.0, draws 7.0, lookup 1.6, gather
+0.9, uncached 1.6). The mark captures pollute one drawc window (prepare
+31.2 / dlcall 86 in the f6604-6687 window) — ignore windows overlapping a
+mark.
+
+Next: water.v.pica computes bug 33's waves itself (PICA FLR, warp.v.pica's
+math) so tess=0 keeps the wave animation at coarse resolution, and the
+CPU-side per-vertex offsets disappear for the non-ripple path. Then the
+DL-call cost (prepare 5.0 + draws 7.0) and the game thread are the walls.
