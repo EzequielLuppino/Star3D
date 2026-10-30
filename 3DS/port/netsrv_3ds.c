@@ -52,6 +52,9 @@
 
 static volatile bool s_restart;
 static volatile bool s_on;
+static volatile bool s_quit;
+static Thread s_thread;
+static int s_listen_fd = -1;
 static int s_port;
 
 bool netsrv_restart_requested(void) { return s_restart; }
@@ -73,10 +76,16 @@ static void trace(const char* fmt, ...) {
 }
 
 // Release the soc session (listener included) on every exit path, so the next
-// boot's bind() never has to wait out a lingering port
+// boot's bind() never has to wait out a lingering port. Joins the server
+// thread first: a thread doing file ops while exit() tears the devices down
+// crashes in the devoptab (data abort far=0xC, opendir/FindDevice).
 void netsrv_shutdown(void) {
     if (!s_on) return;
     s_on = false;
+    s_quit = true;
+    if (s_listen_fd >= 0) close(s_listen_fd);  // Wake the accept loop
+    if (s_thread) threadJoin(s_thread, U64_MAX);
+    s_thread = NULL;
     socExit();
 }
 
@@ -467,16 +476,22 @@ static void server_main(void* arg) {
         close(fd);
         return;
     }
+    s_listen_fd = fd;
     LOG_WARN("netsrv", "server on port %d (core 3): http://<console>:%d/", s_port, s_port);
     trace("server: listening on %d", s_port);
     for (;;) {
+        if (s_quit) break;
         struct sockaddr_in cli;
         socklen_t cl = sizeof(cli);
         int c = accept(fd, (struct sockaddr*)&cli, &cl);
-        if (c < 0) continue;
+        if (c < 0) {
+            if (s_quit) break;
+            continue;
+        }
         handle(c);
         close(c);
     }
+    // The listen fd was closed by netsrv_shutdown to wake this accept
 }
 
 void netsrv_init(void) {
@@ -503,6 +518,7 @@ void netsrv_init(void) {
         Thread t = threadCreate(server_main, NULL, 64 * 1024, 0x30, cores[i], false);
         trace("init: threadCreate core %d -> %p", cores[i], (void*)t);
         if (t) {
+            s_thread = t;
             LOG_WARN("netsrv", "server thread on core %d", cores[i]);
             return;
         }
