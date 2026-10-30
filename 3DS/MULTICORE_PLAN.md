@@ -4337,3 +4337,26 @@ Next: water.v.pica computes bug 33's waves itself (PICA FLR, warp.v.pica's
 math) so tess=0 keeps the wave animation at coarse resolution, and the
 CPU-side per-vertex offsets disappear for the non-ripple path. Then the
 DL-call cost (prepare 5.0 + draws 7.0) and the game thread are the walls.
+
+## 60 fps chase: water waves moved into the vertex shader (2026-10-30, evening)
+
+water.v.pica now has a wave mode (texwarp.z > 0 = wave_params, z <= 0 =
+colour-carried decode), computing bug 33's sawtooth waves from the object
+position with PICA FLR (warp.v.pica's math, mad-folded to fit the shared
+512-instruction blob: 511 total). With S3D_WATER_RIPPLE=0 the CPU skips the
+per-vertex offsets and uploads the wave params, so S3D_WATER_TESS=0 keeps
+the animation at the mesh's own vertices; the caustic ripple path is
+unchanged. The water_tess_restore default-wave reset applies to wave mode
+too (s_wt_waves = true after the wave upload).
+
+Console validation is pending (the console's env.txt was accidentally
+overwritten with a one-line file, so the HTTP loop is down until ftpd can
+restore it). Pending measurements: cuts + S3D_WATER_TESS=0 +
+S3D_WATER_RIPPLE=0 with the wave build (expect frame ~27.4 ms, GPU ~20.9,
+with animated water), and a visual check of the wave mode.
+
+Next profile targets after that (cuts, tess=0, from the 27.4 ms run):
+dlcall prepare 5.0 ms (state setup; ~50 KCOL dirties/frame, ~27 with
+TEV/TEX on top - the GX_PROFILE_DETAIL prep.d_* counters need a PROFILE=1
+build to break it down), dlcall draws 7.0 ms (play_entry submission),
+drawc draw 5.7 ms, lookup 1.6, uncached 1.6.
