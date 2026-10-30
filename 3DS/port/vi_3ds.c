@@ -159,6 +159,8 @@ void VIWaitForRetrace(void) {
             LOG_INFO("vi", "START+SELECT pressed, exiting");
             port_shutdown_and_exit(0);
         }
+        // SELECT alone marks the spot without a capture ("pmark" log line)
+        if (hidKeysDown() & KEY_SELECT) diag_pmark();
     }
     // Net server restart (GET /restart): relaunch the app with the new build
     // (PUT /app.3dsx) through Rosalina's hb:ldr, then exit

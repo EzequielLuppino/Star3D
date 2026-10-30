@@ -30,6 +30,12 @@ static void update_triggers(void);
 // real inputs frame by frame, so the recorded route can be replayed hands
 // off (for testing areas, A/B runs, captures).
 #define PADREC_PATH "sdmc:/3ds/star3d/padrec.bin"
+#define PADREC_MAX_BYTES (12u * 1024 * 1024)
+// The game can poll PADRead several times per frame (loading loops poll
+// thousands of times a second), so one frame is recorded (and played back)
+// per ~15 ms; the played-back frame is held and re-applied on every poll of
+// the same game frame
+#define PADREC_FRAME_MS 15
 typedef struct {
     u16 button;
     s8 stickX, stickY, substickX, substickY;
@@ -44,6 +50,12 @@ static void padrec_reserve(u32 need) {
     if (need <= s_padrec_cap) return;
     u32 cap = s_padrec_cap ? s_padrec_cap : 65536;
     while (cap < need) cap *= 2;
+    if ((u64)cap * sizeof(PadRecFrame) > PADREC_MAX_BYTES) {
+        LOG_ERROR("pad", "padrec: stopped at %lu frames (%.0f MB limit)", (unsigned long)s_padrec_count,
+                  PADREC_MAX_BYTES / 1048576.0);
+        s_padrec_recording = false;
+        return;
+    }
     PadRecFrame* p = (PadRecFrame*)realloc(s_padrec, cap * sizeof(PadRecFrame));
     if (!p) {
         LOG_ERROR("pad", "padrec: out of memory at %lu frames", (unsigned long)cap);
@@ -67,7 +79,7 @@ static void padrec_write(void) {
 }
 
 void padrec_flush(void) {
-    if (s_padrec_recording) padrec_write();
+    if (s_padrec_count) padrec_write();  // Even if the recording stopped early
 }
 
 static void padrec_init(void) {
@@ -149,35 +161,57 @@ u32 PADRead(PADStatus* status) {
     g_pad_status.button |= vbuttons;
     if (vbuttons & PAD_BUTTON_A) g_pad_status.analogA = 255;
 
-    // Playback: the recorded route replaces the real input
-    if (s_padrec_playing && s_padrec_idx < s_padrec_count) {
-        const PadRecFrame* f = &s_padrec[s_padrec_idx++];
-        g_pad_status.button = f->button;
-        g_pad_status.stickX = f->stickX;
-        g_pad_status.stickY = f->stickY;
-        g_pad_status.substickX = f->substickX;
-        g_pad_status.substickY = f->substickY;
-        g_pad_status.analogA = f->analogA;
-        g_pad_status.analogB = f->analogB;
-        g_pad_status.triggerLeft = f->triggerL;
-        g_pad_status.triggerRight = f->triggerR;
+    // Playback: advance one recorded frame per game frame and hold it, so the
+    // recorded route wins over the real inputs even if the game polls PAD
+    // several times per frame
+    if (s_padrec_playing) {
+        static u64 last_ms;
+        static PadRecFrame held;
+        static bool have;
+        u64 now = osGetTime();
+        if (!have || now - last_ms >= PADREC_FRAME_MS) {
+            last_ms = now;
+            have = true;
+            if (s_padrec_idx < s_padrec_count) {
+                held = s_padrec[s_padrec_idx++];
+            } else {
+                memset(&held, 0, sizeof(held));
+                s_padrec_playing = false;  // Route over: real inputs return
+                have = false;
+            }
+        }
+        if (have) {
+            g_pad_status.button = held.button;
+            g_pad_status.stickX = held.stickX;
+            g_pad_status.stickY = held.stickY;
+            g_pad_status.substickX = held.substickX;
+            g_pad_status.substickY = held.substickY;
+            g_pad_status.analogA = held.analogA;
+            g_pad_status.analogB = held.analogB;
+            g_pad_status.triggerLeft = held.triggerL;
+            g_pad_status.triggerRight = held.triggerR;
+        }
     }
 
-    // Record: the effective input the game receives (hardware + remote +
-    // touch menu, or the played-back route)
+    // Record: one frame per ~15 ms (see PADREC_FRAME_MS)
     if (s_padrec_recording) {
-        padrec_reserve(s_padrec_count + 1);
-        if (s_padrec) {
-            PadRecFrame* f = &s_padrec[s_padrec_count++];
-            f->button = g_pad_status.button;
-            f->stickX = g_pad_status.stickX;
-            f->stickY = g_pad_status.stickY;
-            f->substickX = g_pad_status.substickX;
-            f->substickY = g_pad_status.substickY;
-            f->analogA = g_pad_status.analogA;
-            f->analogB = g_pad_status.analogB;
-            f->triggerL = g_pad_status.triggerLeft;
-            f->triggerR = g_pad_status.triggerRight;
+        static u64 last_ms;
+        u64 now = osGetTime();
+        if (now - last_ms >= PADREC_FRAME_MS) {
+            last_ms = now;
+            padrec_reserve(s_padrec_count + 1);
+            if (s_padrec) {
+                PadRecFrame* f = &s_padrec[s_padrec_count++];
+                f->button = g_pad_status.button;
+                f->stickX = g_pad_status.stickX;
+                f->stickY = g_pad_status.stickY;
+                f->substickX = g_pad_status.substickX;
+                f->substickY = g_pad_status.substickY;
+                f->analogA = g_pad_status.analogA;
+                f->analogB = g_pad_status.analogB;
+                f->triggerL = g_pad_status.triggerLeft;
+                f->triggerR = g_pad_status.triggerRight;
+            }
         }
     }
 

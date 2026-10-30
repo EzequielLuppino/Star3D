@@ -92,6 +92,14 @@ void diag_mark(void) {
     log_flush();
 }
 
+// A lightweight SELECT press mark: just the position, no capture, no census
+// (the capture can crash the console, OPEN_BUGS.md, so marking spots during a
+// recorded route must not trigger one)
+void diag_pmark(void) {
+    if (!savestate_log_where("pmark")) LOG_INFO("pmark", "not in game");
+    log_flush();
+}
+
 // --- GPU cost sweep (S3D_GPU_SWEEP=<map id>) ---------------------------------
 // One standing-still run measures what each render feature costs: 10 s after
 // that map loads, every SWEEP_FRAMES frames one setting changes from the
