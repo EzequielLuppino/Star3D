@@ -4287,3 +4287,36 @@ prepare ~4.8, lookup ~1.5, dlb ~0.4, validate ~0.5, gather ~0.8, draws ~24.8
 (~94 us per call), rest ~0.4. The draw submission inside the cached-DL play
 loop is the single remaining item; the drawc split is queued for the next
 console run.
+
+## 60 fps chase: stereo at full separation, the water 25 ms, 3dslink loop (2026-10-30)
+
+Two changes to how the chase is measured, then a bisect result.
+
+**Forced stereo.** S3D_STEREO_FORCE=1 renders full eye separation regardless
+of the slider. This made the real 3D cost visible: the GPU time doubled
+(15.0 -> 29.9 ms/frame) because at slider-0 the port had been rendering one
+eye only. Hub frame at cuts + forced stereo: 49.4 ms (delta 1) / 52.1 ms
+(delta 0), sceneRender ~17 ms. All further numbers are forced-stereo.
+
+**Console loop now runs over 3dslink.** With the console sitting in the
+Homebrew Launcher's netloader, a build is launched with:
+`docker run --rm --network host -v $PWD:/workspace star3d-builder -c
+'/opt/devkitpro/tools/bin/3dslink -a <ip> /workspace/out/star3d-nodata.3dsx'`
+(bypass the image entrypoint, which mangles the args). env.txt and the romfs
+data come from the SD as before; the in-game HTTP server is up ~10 s after
+launch. This replaces both the ftpd dance and the restart-based reload for
+iteration: one 3dslink per build, no restart needed.
+
+**drawc bisect result.** The draw-cached cost (31 ms/frame, ~304 calls) is:
+
+- flush 0.11, prepare 0.14, layout 0.14 (14 switches/frame), water 24.98,
+  vsrc 0.11, draw 5.7
+
+So layout switches are cheap and the whole cost sits in the water step:
+water_tessellate is entered 380x/frame but only 6 calls are active water
+draws. Hoisting the six per-call CFG_LIVE config reads into one cfg_gen
+check changed nothing (the early-return path is ~2 us in the disassembly).
+A warp-entry tick now separates entry+warp-check time from the tessellation
+body; if the body owns the 25 ms, the 6 active draws are tessellating huge
+meshes and the fix is capping/merging the water geometry instead of micro-
+optimizing the call path.
