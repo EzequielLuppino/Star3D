@@ -1233,12 +1233,19 @@ static int water_tess_level(u32 tris, int n) {
 // A water split draw with a warp: the water shader reads its offsets from
 // the vertex colour, so every such draw goes through water_tessellate
 static bool water_warp_draw(void) {
-    CFG_LIVE(s_wt_max, cfg_int("S3D_WATER_TESS", 16));
-    CFG_LIVE(s_wt_step, cfg_int("S3D_WATER_TESS_STEP", 5));
-    CFG_LIVE(s_wt_wave, cfg_int("S3D_WATER_WAVE_MIN", 20));
-    CFG_LIVE(s_wt_uv, cfg_int("S3D_WATER_TESS_UV", 12));
-    CFG_LIVE(s_wt_ripple, cfg_bool("S3D_WATER_RIPPLE", true) ? 1 : 0);
-    CFG_LIVE(s_wt_pct, cfg_int("S3D_WATER_RIPPLE_PCT", 100));
+    // The six config reads happen once per config generation instead of six
+    // CFG_LIVE checks per call; the live water state is still checked every
+    // call (it changes without a config bump)
+    static unsigned gen_ = 0xFFFFFFFF;
+    if (gen_ != cfg_gen()) {
+        gen_ = cfg_gen();
+        s_wt_max = cfg_int("S3D_WATER_TESS", 16);
+        s_wt_step = cfg_int("S3D_WATER_TESS_STEP", 5);
+        s_wt_wave = cfg_int("S3D_WATER_WAVE_MIN", 20);
+        s_wt_uv = cfg_int("S3D_WATER_TESS_UV", 12);
+        s_wt_ripple = cfg_bool("S3D_WATER_RIPPLE", true) ? 1 : 0;
+        s_wt_pct = cfg_int("S3D_WATER_RIPPLE_PCT", 100);
+    }
     if (!s_ws_on || !s_ws_proj) return false;
     return s_map.unit_warp[0] > 0.0f || s_map.unit_warp[s_ws.refr_unit] > 0.0f;
 }
@@ -1377,9 +1384,21 @@ static void wt_lerp_std(GxOutVertex* o, const GxOutVertex* a, const GxOutVertex*
 // water split. `packed`: the vertices are GxPackedVertex (positions x
 // pos_scale, texcoords x tc_scale), else GxOutVertex. Returns true when the
 // draw needs water_tess_restore afterwards
+// The draw-cached cost split's warp bucket: water_tessellate entry + warp
+// check time, reported by gx_render_drawc_report ("warp-entry" in the drawc
+// line)
+static u64 s_drawc_warp;
+
 static bool water_tessellate(bool packed, const void** verts, const u16** indices, u32* count, float pos_scale,
                              float tc_scale) {
-    if (!water_warp_draw()) return false;
+    u64 w0 = svcGetSystemTick();
+    PROF_COUNT("drawc.water_calls", 1);
+    if (!water_warp_draw()) {
+        s_drawc_warp += svcGetSystemTick() - w0;
+        return false;
+    }
+    s_drawc_warp += svcGetSystemTick() - w0;
+    PROF_COUNT("drawc.water_active", 1);
     // From here the water shader reads the vertex colour: no warp unless the
     // offsets get written
     upload_water_decode(0.0f);
@@ -1522,32 +1541,39 @@ bool gx_render_can_pipeline(void) { return s_buffers_doubled; }
 // Draw-cached cost split (S3D_DLCALL_PROFILE): per-step ticks for the cached
 // draw paths, reported from gx_dlcache.c's frame window ("drawc" lines)
 static int s_drawc_on;
-static u64 s_drawc_t[4];  // flush, prepare, layout/vsrc, draw
+static u64 s_drawc_t[6];  // flush, prepare, layout, water, vsrc, draw
 static u32 s_drawc_calls;
+// s_drawc_warp is declared above with water_tessellate: it accumulates
+// water-tessellate entry + warp check time
 
 void gx_render_drawc_prof_on(void) { s_drawc_on = 1; }
 
 void gx_render_drawc_report(int frames) {
     if (!s_drawc_on || frames <= 0) return;
     double per = 1.0 / (SYSCLOCK_ARM11 / 1000.0) / frames;  // ticks -> ms per frame
-    LOG_DEBUG("drawc", "drawc %.2f ms/frame, %u calls: flush %.2f prepare %.2f layout+vsrc %.2f draw %.2f",
-              (double)(s_drawc_t[0] + s_drawc_t[1] + s_drawc_t[2] + s_drawc_t[3]) * per,
+    LOG_DEBUG("drawc", "drawc %.2f ms/frame, %u calls: flush %.2f prepare %.2f layout %.2f water %.2f vsrc %.2f "
+             "draw %.2f (warp-entry %.2f)",
+              (double)(s_drawc_t[0] + s_drawc_t[1] + s_drawc_t[2] + s_drawc_t[3] + s_drawc_t[4] + s_drawc_t[5]) * per,
               (unsigned)s_drawc_calls / (unsigned)frames, (double)s_drawc_t[0] * per, (double)s_drawc_t[1] * per,
-              (double)s_drawc_t[2] * per, (double)s_drawc_t[3] * per);
+              (double)s_drawc_t[2] * per, (double)s_drawc_t[3] * per, (double)s_drawc_t[4] * per,
+              (double)s_drawc_t[5] * per, (double)s_drawc_warp * per);
     memset(s_drawc_t, 0, sizeof(s_drawc_t));
     s_drawc_calls = 0;
+    s_drawc_warp = 0;
 }
 
 // The four steps around a cached draw (no-op unless profiling)
-#define DRAWC_BEGIN() u64 dc_t0 = svcGetSystemTick(), dc_t1, dc_t2, dc_t3, dc_t4
+#define DRAWC_BEGIN() u64 dc_t0 = svcGetSystemTick(), dc_t1, dc_t2, dc_t2b, dc_t2c, dc_t3, dc_t4
 #define DRAWC_STEP(a) (a) = svcGetSystemTick()
 #define DRAWC_END()                                                             \
     do {                                                                        \
         if (s_drawc_on) {                                                       \
             s_drawc_t[0] += dc_t1 - dc_t0;                                      \
             s_drawc_t[1] += dc_t2 - dc_t1;                                      \
-            s_drawc_t[2] += dc_t3 - dc_t2;                                      \
-            s_drawc_t[3] += dc_t4 - dc_t3;                                      \
+            s_drawc_t[2] += dc_t2b - dc_t2;                                     \
+            s_drawc_t[3] += dc_t2c - dc_t2b;                                    \
+            s_drawc_t[4] += dc_t3 - dc_t2c;                                     \
+            s_drawc_t[5] += dc_t4 - dc_t3;                                      \
             s_drawc_calls++;                                                    \
         }                                                                       \
     } while (0)
@@ -1559,8 +1585,10 @@ void gx_render_draw_cached(const GxOutVertex* verts, const u16* indices, u32 ind
     gx_render_prepare();
     DRAWC_STEP(dc_t2);
     use_layout(LAYOUT_STD, 1.0f, 1.0f);
+    DRAWC_STEP(dc_t2b);
     const void* v = verts;
     bool tess = water_tessellate(false, &v, &indices, &index_count, 1.0f, 1.0f);
+    DRAWC_STEP(dc_t2c);
     set_vsrc(VS_STD, v, NULL);
     DRAWC_STEP(dc_t3);
     draw_triangles(index_count, indices);
@@ -1607,6 +1635,7 @@ static void use_layout(int layout, float pos_scale, float tc_scale) {
         s_cur_pos_scale = pos_scale;
         s_cur_tc_scale = tc_scale;
         s_unif_layout = layout;
+        PROF_COUNT("drawc.layout_switches", 1);
         upload_posscale();
     }
 }
@@ -1621,8 +1650,10 @@ void gx_render_draw_cached_packed(const GxPackedVertex* verts, const u16* indice
     gx_render_prepare();
     DRAWC_STEP(dc_t2);
     use_layout(LAYOUT_PACKED, pos_scale, tc_scale);
+    DRAWC_STEP(dc_t2b);
     const void* v = verts;
     bool tess = water_tessellate(true, &v, &indices, &index_count, pos_scale, tc_scale);
+    DRAWC_STEP(dc_t2c);
     set_vsrc(VS_PACKED, v, NULL);
     DRAWC_STEP(dc_t3);
     draw_triangles(index_count, indices);
@@ -1674,6 +1705,8 @@ void gx_render_draw_cached_dynamic16(const GxOutVertex* verts, const GxDyn16Vert
     gx_render_prepare();
     DRAWC_STEP(dc_t2);
     use_layout(LAYOUT_DYN16, pos_scale, 1.0f);
+    DRAWC_STEP(dc_t2b);
+    DRAWC_STEP(dc_t2c);
     set_vsrc(VS_DYN16, verts, dyn);  // Position and normal from dyn
     DRAWC_STEP(dc_t3);
     draw_triangles(index_count, indices);
@@ -1696,6 +1729,8 @@ void gx_render_draw_cached_dynamic(const GxOutVertex* verts, const GxDynVertex* 
     gx_render_prepare();
     DRAWC_STEP(dc_t2);
     use_layout(LAYOUT_STD, 1.0f, 1.0f);
+    DRAWC_STEP(dc_t2b);
+    DRAWC_STEP(dc_t2c);
     set_vsrc(VS_DYN, verts, dyn);
     DRAWC_STEP(dc_t3);
     draw_triangles(index_count, indices);
