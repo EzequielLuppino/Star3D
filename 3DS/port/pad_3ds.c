@@ -1,9 +1,11 @@
 // PAD (controller) for 3DS: maps the 3DS buttons/sticks onto GameCube PADStatus.
 #include "log.h"
 #include "remote_3ds.h"
+#include "config.h"
 #include <dolphin/pad.h>
 #include <3ds.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 // controls_3ds.c, touchui_3ds.c
@@ -20,6 +22,84 @@ static void update_analog_sticks(void);
 static void update_digital_buttons(void);
 static void update_triggers(void);
 
+// --- Input record / playback (env, default off) --------------------------
+// S3D_PAD_RECORD=1 records the effective input of every PADRead (buttons,
+// sticks, triggers - hardware, remote and touch menu combined) into RAM and
+// writes sdmc:/3ds/star3d/padrec.bin at shutdown: play a route once, quit,
+// and the file is there. S3D_PAD_PLAY=1 plays that file back, overriding the
+// real inputs frame by frame, so the recorded route can be replayed hands
+// off (for testing areas, A/B runs, captures).
+#define PADREC_PATH "sdmc:/3ds/star3d/padrec.bin"
+typedef struct {
+    u16 button;
+    s8 stickX, stickY, substickX, substickY;
+    u8 analogA, analogB, triggerL, triggerR;
+} PadRecFrame;  // 10 bytes
+
+static PadRecFrame* s_padrec;
+static u32 s_padrec_count, s_padrec_cap, s_padrec_idx;
+static bool s_padrec_recording, s_padrec_playing;
+
+static void padrec_reserve(u32 need) {
+    if (need <= s_padrec_cap) return;
+    u32 cap = s_padrec_cap ? s_padrec_cap : 65536;
+    while (cap < need) cap *= 2;
+    PadRecFrame* p = (PadRecFrame*)realloc(s_padrec, cap * sizeof(PadRecFrame));
+    if (!p) {
+        LOG_ERROR("pad", "padrec: out of memory at %lu frames", (unsigned long)cap);
+        s_padrec_recording = false;
+        return;
+    }
+    s_padrec = p;
+    s_padrec_cap = cap;
+}
+
+static void padrec_write(void) {
+    if (!s_padrec_count) return;
+    FILE* f = fopen(PADREC_PATH, "wb");
+    if (!f) {
+        LOG_ERROR("pad", "padrec: cannot write %s", PADREC_PATH);
+        return;
+    }
+    size_t ok = fwrite(s_padrec, sizeof(PadRecFrame), s_padrec_count, f);
+    fclose(f);
+    LOG_WARN("pad", "padrec: wrote %lu frames to %s", (unsigned long)ok, PADREC_PATH);
+}
+
+void padrec_flush(void) {
+    if (s_padrec_recording) padrec_write();
+}
+
+static void padrec_init(void) {
+    s_padrec_recording = cfg_int("S3D_PAD_RECORD", 0) != 0;
+    s_padrec_playing = cfg_int("S3D_PAD_PLAY", 0) != 0;
+    if (!s_padrec_recording && !s_padrec_playing) return;
+    if (s_padrec_recording) LOG_WARN("pad", "padrec: recording input (flushed at shutdown)");
+    if (s_padrec_playing) {
+        FILE* f = fopen(PADREC_PATH, "rb");
+        if (!f) {
+            LOG_ERROR("pad", "padrec: cannot open %s for playback", PADREC_PATH);
+            s_padrec_playing = false;
+            return;
+        }
+        fseek(f, 0, SEEK_END);
+        long size = ftell(f);
+        fseek(f, 0, SEEK_SET);
+        s_padrec_count = (u32)(size / (long)sizeof(PadRecFrame));
+        s_padrec = (PadRecFrame*)malloc((size_t)s_padrec_count * sizeof(PadRecFrame));
+        if (!s_padrec) {
+            LOG_ERROR("pad", "padrec: out of memory loading %s", PADREC_PATH);
+            fclose(f);
+            s_padrec_playing = false;
+            return;
+        }
+        size_t got = fread(s_padrec, sizeof(PadRecFrame), s_padrec_count, f);
+        fclose(f);
+        LOG_WARN("pad", "padrec: playing %lu recorded frames", (unsigned long)got);
+        s_padrec_count = (u32)got;
+    }
+}
+
 BOOL PADInit(void) {
     // HID is initialized by libctru at startup; irrst provides the C-Stick
     // (and ZL/ZR) on New 3DS and the Circle Pad Pro on Old 3DS.
@@ -29,6 +109,7 @@ BOOL PADInit(void) {
     memset(&g_pad_status, 0, sizeof(PADStatus));
 
     g_input_initialized = true;
+    padrec_init();
 
     LOG_INFO("pad", "PAD bridge initialized\n");
     return TRUE;
@@ -67,6 +148,38 @@ u32 PADRead(PADStatus* status) {
     }
     g_pad_status.button |= vbuttons;
     if (vbuttons & PAD_BUTTON_A) g_pad_status.analogA = 255;
+
+    // Playback: the recorded route replaces the real input
+    if (s_padrec_playing && s_padrec_idx < s_padrec_count) {
+        const PadRecFrame* f = &s_padrec[s_padrec_idx++];
+        g_pad_status.button = f->button;
+        g_pad_status.stickX = f->stickX;
+        g_pad_status.stickY = f->stickY;
+        g_pad_status.substickX = f->substickX;
+        g_pad_status.substickY = f->substickY;
+        g_pad_status.analogA = f->analogA;
+        g_pad_status.analogB = f->analogB;
+        g_pad_status.triggerLeft = f->triggerL;
+        g_pad_status.triggerRight = f->triggerR;
+    }
+
+    // Record: the effective input the game receives (hardware + remote +
+    // touch menu, or the played-back route)
+    if (s_padrec_recording) {
+        padrec_reserve(s_padrec_count + 1);
+        if (s_padrec) {
+            PadRecFrame* f = &s_padrec[s_padrec_count++];
+            f->button = g_pad_status.button;
+            f->stickX = g_pad_status.stickX;
+            f->stickY = g_pad_status.stickY;
+            f->substickX = g_pad_status.substickX;
+            f->substickY = g_pad_status.substickY;
+            f->analogA = g_pad_status.analogA;
+            f->analogB = g_pad_status.analogB;
+            f->triggerL = g_pad_status.triggerLeft;
+            f->triggerR = g_pad_status.triggerRight;
+        }
+    }
 
     // The game passes an array of PAD_MAX_CONTROLLERS entries; the 3DS only
     // has one controller, so channels 1-3 report as disconnected.

@@ -370,6 +370,7 @@ void port_shutdown_and_exit(int code) {
     // when targets are deleted inside a frame
     gx_frame_end();
     gx_deinit();
+    padrec_flush();  // Input recording (S3D_PAD_RECORD=1)
     log_shutdown();
     gfxExit();
     exit(code);
