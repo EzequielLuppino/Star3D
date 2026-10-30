@@ -23,8 +23,13 @@
 .fvec texsrc[3]       ; per slot: x = texcoord attribute, y = position, z = normal,
                       ; w = warp amplitude (4x the offset, in texture units)
 .fvec posscale        ; x: position scale (fixed-point inputs), y: normal input scale, z: texcoord scale
-.fvec texwarp         ; here: decode of the colour-carried offsets (xy scale, zw bias);
-                      ; default/warp.v.pica: wave frequencies and phases
+.fvec texwarp         ; two modes, picked by texwarp.z (decode mode always has
+                      ; texwarp.zw = -128 k <= 0, wave mode carries wave_params
+                      ; with phase z > 0):
+                      ; - wave mode: bug 33's wave frequencies and phases, the
+                      ;   waves computed here from the object position;
+                      ; - decode mode: xy scale / zw bias of the colour-carried
+                      ;   offsets (gx_render.c computes them for the ripple)
 
 ; Constants
 .constf myconst(0.0, 1.0, 0.00392156862745, 0.0)
@@ -74,12 +79,29 @@
 	; vertex alpha)
 	mul outclr, inv255, inclr
 
-	; Indirect warp stand-in: gx_render.c (water_tessellate) computes the
-	; offsets per vertex on the CPU (the GameCube's caustic reads at TEX0, bug
-	; 35, or bug 33's waves) and passes them in the colour's red/green:
-	; r10.xy = colour.rg * texwarp.xy + texwarp.zw (texwarp = 0: no warp)
-	mul r10.xy, texwarp.xy, inclr.xy
-	add r10.xy, texwarp.zw, r10.xy
+	; Warp offsets, two modes picked by texwarp.z (see the uniform comment):
+	; wave mode computes bug 33's travelling waves from the object position
+	; (the same math as warp.v.pica), so gx_render.c skips the per-vertex CPU
+	; offsets when the caustic ripple is off; decode mode decodes the
+	; CPU-calculated offsets (the GameCube's caustic reads at TEX0, bug 35)
+	; carried in the colour's red/green (texwarp = 0: no warp). The mad
+	; addend slot takes the uniform and cmp compares a temp, so texwarp goes
+	; through r11
+	mov r11, texwarp
+	cmp zeros, gt, gt, r11.zzzz
+	ifc !cmp.x
+		mad r10.xy, inclr.xy, r11.xy, texwarp.zw
+	.end
+	ifc cmp.x
+		add r10.xy, r0.xz, r0.yy
+		mad r10.xy, r10.xy, r11.xy, texwarp.zw
+		flr r11.xy, r10.xy
+		add r10.xy, r10.xy, -r11.xy
+		mul r10.xy, twos, r10.xy
+		add r10.xy, -ones, r10.xy
+		max r11.xy, r10.xy, -r10.xy
+		mad r10.xy, r10.xy, -r11.xy, r10.xy
+	.end
 
 	; Slot 0 texgen from the position (r0.w = 1)
 	dp4 r3.x, texmtx[0], r0
@@ -87,8 +109,7 @@
 	dp4 r3.z, texmtx[2], r0
 	; The warp offset is added after the divide: (s + w q) / q = s / q + w
 	mul r2.xy, texsrc[0].ww, r10.xy
-	mul r2.xy, r3.zz, r2.xy
-	add r3.xy, r3.xy, r2.xy
+	mad r3.xy, r3.zz, r2.xy, r3.xy
 	mov outtc0.zw, zeros
 	mov outtc0.xy, r3.xy
 	mov outq, r3.zzzz

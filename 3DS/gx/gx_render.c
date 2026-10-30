@@ -1307,12 +1307,14 @@ typedef struct {
     float m1[2][4], m2[2][4];  // Indirect stages 0 and 1: TEX0 -> caustic coordinate
     float su, sv, tu, tv;      // GameCube texel offset (s, t) -> PICA (u, v) offset
     float waves[4];            // Fallback: analytic waves (wave_params)
+    float wave_len;            // Fallback-wave spatial period (for the vsh wave mode)
     float amp4;                // texsrc[0].w of the refraction pass
 } WaterOfs;
 
 static void water_ofs_setup(WaterOfs* w, float wave_len) {
     w->amp4 = 4.0f * (s_map.unit_warp[s_ws.refr_unit] > 0.0f ? s_map.unit_warp[s_ws.refr_unit] : s_map.unit_warp[0]);
     w->ripple = s_wt_ripple && s_map.ripple_unit >= 0;
+    w->wave_len = wave_len;
     wave_params(wave_len, w->waves);
     if (!w->ripple) return;
     if (!s_caustic_ready) caustic_init();
@@ -1430,7 +1432,17 @@ static bool water_tessellate(bool packed, const void** verts, const u16** indice
     // offsets get written
     upload_water_decode(0.0f);
     u32 tris = *count / 3;
-    if (!tris || s_wt_max < 1 || s_raw_draw || s_discard) return true;
+    if (!tris || s_raw_draw || s_discard) return true;
+    if (s_wt_max < 1) {
+        // No tessellation (S3D_WATER_TESS=0): bug 33's waves still animate
+        // when the ripple is off - water.v.pica's wave mode computes them at
+        // the mesh's own vertices (coarse, but moving)
+        if (!(s_wt_ripple && s_map.ripple_unit >= 0)) {
+            upload_texwarp(s_wt_wave > 0 ? (float)s_wt_wave : 20.0f);
+            s_wt_waves = true;  // water_tess_restore resets the default waves
+        }
+        return true;
+    }
     PROF_COUNT("gx.water_in_tris", tris);
     const u16* idx = *indices;
     const GxPackedVertex* pv = packed ? (const GxPackedVertex*)*verts : NULL;
@@ -1483,6 +1495,10 @@ static bool water_tessellate(bool packed, const void** verts, const u16** indice
         wo.su *= f, wo.sv *= f, wo.tu *= f, wo.tv *= f;
         PROF_COUNT("gx.water_ripple_faded", 1);
     }
+    // Bug 33's waves can run in the vertex shader (PICA FLR, water.v.pica's
+    // wave mode); the caustic ripple cannot, so it keeps the per-vertex CPU
+    // offsets in the colour
+    bool vsh_waves = !wo.ripple;
     u32 nv = 0, ni = 0;
     float inv = 1.0f / (float)n;
     u64 ph4 = svcGetSystemTick();
@@ -1496,14 +1512,18 @@ static bool water_tessellate(bool packed, const void** verts, const u16** indice
                 if (packed) {
                     GxPackedVertex* o = (GxPackedVertex*)ov + nv;
                     wt_lerp_packed(o, &pv[ia], &pv[ib], &pv[ic], n - i - j, i, j, inv);
-                    for (int c = 0; c < 3; c++) p[c] = o->pos[c] * pos_scale;
-                    if (ru >= 0) uv[0] = o->tc[ru][0] * tc_scale, uv[1] = o->tc[ru][1] * tc_scale;
-                    water_ofs_vertex(&wo, uv, p, o->color);
+                    if (!vsh_waves) {
+                        for (int c = 0; c < 3; c++) p[c] = o->pos[c] * pos_scale;
+                        if (ru >= 0) uv[0] = o->tc[ru][0] * tc_scale, uv[1] = o->tc[ru][1] * tc_scale;
+                        water_ofs_vertex(&wo, uv, p, o->color);
+                    }
                 } else {
                     GxOutVertex* o = (GxOutVertex*)ov + nv;
                     wt_lerp_std(o, &sv[ia], &sv[ib], &sv[ic], n - i - j, i, j, inv);
-                    if (ru >= 0) uv[0] = o->tc[ru][0], uv[1] = o->tc[ru][1];
-                    water_ofs_vertex(&wo, uv, o->pos, o->color);
+                    if (!vsh_waves) {
+                        if (ru >= 0) uv[0] = o->tc[ru][0], uv[1] = o->tc[ru][1];
+                        water_ofs_vertex(&wo, uv, o->pos, o->color);
+                    }
                 }
                 nv++;
             }
@@ -1532,7 +1552,14 @@ static bool water_tessellate(bool packed, const void** verts, const u16** indice
     s_wt_ph[1] += ph3 - ph2;
     s_wt_ph[2] += ph5 - ph4;
     s_wt_ph[3] += ph4 - ph3;
-    upload_water_decode(wo.amp4);
+    // Wave mode: the shader multiplies the waves it computes by texsrc[0].w
+    // (the amplitude) itself; decode mode carries the offsets in the colour
+    if (vsh_waves) {
+        upload_texwarp(wo.wave_len);
+        s_wt_waves = true;  // water_tess_restore resets the default waves
+    } else {
+        upload_water_decode(wo.amp4);
+    }
     *verts = ov;
     *indices = oi;
     *count = ni;
