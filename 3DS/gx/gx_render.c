@@ -1268,9 +1268,19 @@ static void caustic_init(void) {
 }
 
 // Bilinear, repeating (s, t: normalized coordinates)
+// VFPv2 has no hardware floor/round, so floorf() and lroundf() are newlib
+// calls (~100 cycles each). The water offset path runs them per tessellated
+// vertex (thousands per frame), so it uses these inline versions instead:
+// a truncating vcvt plus a fixup, exact for the bounded values here
+// (|x| < 2^22).
+static inline float wt_floor(float x) {
+    float r = (float)(int)x;
+    return r > x ? r - 1.0f : r;
+}
+
 static void caustic_sample(float s, float t, float out[2]) {
     float x = s * 64.0f - 0.5f, y = t * 64.0f - 0.5f;
-    float fx = floorf(x), fy = floorf(y);
+    float fx = wt_floor(x), fy = wt_floor(y);
     float ax = x - fx, ay = y - fy;
     int x0 = (int)fx & 63, y0 = (int)fy & 63, x1 = (x0 + 1) & 63, y1 = (y0 + 1) & 63;
     for (int c = 0; c < 2; c++) {
@@ -1320,7 +1330,10 @@ static void water_ofs_setup(WaterOfs* w, float wave_len) {
 }
 
 static inline u8 water_ofs_enc(float o) {
-    int c = (int)lroundf(128.0f + o * (127.0f / WATER_OFS_RANGE));
+    // lroundf(128 + o * s) written with a truncating convert: non-tie values
+    // match exactly, exact ties can differ by 1 (invisible in the offset
+    // colour)
+    int c = (int)(128.5f + o * (127.0f / WATER_OFS_RANGE));
     return (u8)(c < 1 ? 1 : c > 255 ? 255 : c);
 }
 
@@ -1343,7 +1356,7 @@ static void water_ofs_vertex(const WaterOfs* w, const float uv[2], const float p
         // Bug 33's waves: 4 u (1 - |u|) of a sawtooth over (x + y, z + y)
         float r[2] = { w->waves[0] * (p[0] + p[1]) + w->waves[2], w->waves[1] * (p[2] + p[1]) + w->waves[3] };
         for (int k = 0; k < 2; k++) {
-            float u = 2.0f * (r[k] - floorf(r[k])) - 1.0f;
+            float u = 2.0f * (r[k] - wt_floor(r[k])) - 1.0f;
             r[k] = u * (1.0f - fabsf(u));
         }
         du = w->amp4 * r[0];
@@ -1400,6 +1413,8 @@ static void wt_lerp_std(GxOutVertex* o, const GxOutVertex* a, const GxOutVertex*
 // check time, reported by gx_render_drawc_report ("warp-entry" in the drawc
 // line)
 static u64 s_drawc_warp;
+// Phase split of the active tessellation calls: scan / alloc / vert / idx
+static u64 s_wt_ph[4];
 
 static bool water_tessellate(bool packed, const void** verts, const u16** indices, u32* count, float pos_scale,
                              float tc_scale) {
@@ -1416,10 +1431,12 @@ static bool water_tessellate(bool packed, const void** verts, const u16** indice
     upload_water_decode(0.0f);
     u32 tris = *count / 3;
     if (!tris || s_wt_max < 1 || s_raw_draw || s_discard) return true;
+    PROF_COUNT("gx.water_in_tris", tris);
     const u16* idx = *indices;
     const GxPackedVertex* pv = packed ? (const GxPackedVertex*)*verts : NULL;
     const GxOutVertex* sv = packed ? NULL : (const GxOutVertex*)*verts;
     int ru = s_wt_ripple ? s_map.ripple_unit : -1;
+    u64 ph0 = svcGetSystemTick();
     float max_len2 = 0.0f, max_uv2 = 0.0f;
     for (u32 t = 0; t < tris; t++) {
         float p[3][3], q[3][2] = { { 0 } };
@@ -1438,6 +1455,7 @@ static bool water_tessellate(bool packed, const void** verts, const u16** indice
             if (e0 * e0 + e1 * e1 > max_uv2) max_uv2 = e0 * e0 + e1 * e1;
         }
     }
+    u64 ph1 = svcGetSystemTick();
     float max_len = sqrtf(max_len2);
     int want = s_wt_step > 0 ? (int)ceilf(max_len / (float)s_wt_step) : 1;
     if (ru >= 0 && s_wt_uv > 0) {
@@ -1447,8 +1465,10 @@ static bool water_tessellate(bool packed, const void** verts, const u16** indice
     int n = water_tess_level(tris, want);
     u32 vper = (u32)((n + 1) * (n + 2) / 2), tper = (u32)(n * n);
     u32 vsize = packed ? sizeof(GxPackedVertex) : sizeof(GxOutVertex);
+    u64 ph2 = svcGetSystemTick();
     u8* ov = gx_render_alloc_dynamic(tris * vper * vsize);
     u16* oi = ov ? gx_render_alloc_dynamic(tris * tper * 3 * sizeof(u16)) : NULL;
+    u64 ph3 = svcGetSystemTick();
     if (!ov || !oi) return true;
     // Fallback waves: four grid steps per wave, never shorter than S3D_WATER_WAVE_MIN
     float len = 4.0f * max_len / n, min_len = s_wt_wave > 0 ? (float)s_wt_wave : 20.0f;
@@ -1465,6 +1485,7 @@ static bool water_tessellate(bool packed, const void** verts, const u16** indice
     }
     u32 nv = 0, ni = 0;
     float inv = 1.0f / (float)n;
+    u64 ph4 = svcGetSystemTick();
     for (u32 t = 0; t < tris; t++) {
         u16 ia = idx[t * 3], ib = idx[t * 3 + 1], ic = idx[t * 3 + 2];
         u32 base = nv;
@@ -1503,6 +1524,14 @@ static bool water_tessellate(bool packed, const void** verts, const u16** indice
 #undef WT_V
     }
     s_wt_tris += ni / 3;
+    u64 ph5 = svcGetSystemTick();
+    // Phase split of an active tessellation call (reported in the drawc
+    // window as "wtphase"): scan = edge/uv pass, alloc = dynamic ring,
+    // vert = lerp + offsets, idx = index grid emission
+    s_wt_ph[0] += ph1 - ph0;
+    s_wt_ph[1] += ph3 - ph2;
+    s_wt_ph[2] += ph5 - ph4;
+    s_wt_ph[3] += ph4 - ph3;
     upload_water_decode(wo.amp4);
     *verts = ov;
     *indices = oi;
@@ -1570,7 +1599,11 @@ void gx_render_drawc_report(int frames) {
               (unsigned)s_drawc_calls / (unsigned)frames, (double)s_drawc_t[0] * per, (double)s_drawc_t[1] * per,
               (double)s_drawc_t[2] * per, (double)s_drawc_t[3] * per, (double)s_drawc_t[4] * per,
               (double)s_drawc_t[5] * per, (double)s_drawc_warp * per);
+    LOG_DEBUG("drawc", "wtphase %.2f ms/frame: scan %.2f alloc %.2f vert %.2f idx %.2f",
+              (double)(s_wt_ph[0] + s_wt_ph[1] + s_wt_ph[2] + s_wt_ph[3]) * per, (double)s_wt_ph[0] * per,
+              (double)s_wt_ph[1] * per, (double)s_wt_ph[2] * per, (double)s_wt_ph[3] * per);
     memset(s_drawc_t, 0, sizeof(s_drawc_t));
+    memset(s_wt_ph, 0, sizeof(s_wt_ph));
     s_drawc_calls = 0;
     s_drawc_warp = 0;
 }
