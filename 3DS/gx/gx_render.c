@@ -1353,30 +1353,42 @@ static void water_ofs_vertex(const WaterOfs* w, const float uv[2], const float p
     color[1] = water_ofs_enc(dv);
 }
 
-static inline int wt_round(int sum, int n) { return sum >= 0 ? (sum + n / 2) / n : -((-sum + n / 2) / n); }
+// Water grid interpolation: rounds sum/n half away from zero. ARM11 has no
+// integer divider (a __aeabi_idiv per component is ~60 cycles and a VFP
+// software division ~100, so a full vertex lerp costs ~800), so the quotient
+// is formed from one reciprocal per draw instead. |sum| <= 32768*n with n
+// the tessellation level, so the float product is within ~0.002 of the exact
+// rational; only exact ties (r == n/2, n even) can land on the other side,
+// off by 1 on an interpolated grid vertex (invisible), and the rule is a
+// deterministic function of (sum, inv) so shared mesh edges keep matching
+// vertices (the grid stays watertight).
+static inline int wt_round(int sum, float inv) {
+    return (int)((float)sum * inv + (sum < 0 ? -0.5f : 0.5f));
+}
 
-// One grid vertex: weights (wa, wb, wc) out of n on the corners a, b, c
+// One grid vertex: weights (wa, wb, wc) out of n on the corners a, b, c;
+// inv = 1/n (computed once per draw)
 static void wt_lerp_packed(GxPackedVertex* o, const GxPackedVertex* a, const GxPackedVertex* b,
-                           const GxPackedVertex* c, int wa, int wb, int wc, int n) {
-    for (int k = 0; k < 3; k++) o->pos[k] = (s16)wt_round(wa * a->pos[k] + wb * b->pos[k] + wc * c->pos[k], n);
+                           const GxPackedVertex* c, int wa, int wb, int wc, float inv) {
+    for (int k = 0; k < 3; k++) o->pos[k] = (s16)wt_round(wa * a->pos[k] + wb * b->pos[k] + wc * c->pos[k], inv);
     o->pos[3] = a->pos[3];
-    for (int k = 0; k < 4; k++) o->color[k] = (u8)wt_round(wa * a->color[k] + wb * b->color[k] + wc * c->color[k], n);
+    for (int k = 0; k < 4; k++) o->color[k] = (u8)wt_round(wa * a->color[k] + wb * b->color[k] + wc * c->color[k], inv);
     memcpy(o->idx, a->idx, sizeof(o->idx));
     for (int u = 0; u < GX_PICA_TEX_UNITS; u++)
         for (int k = 0; k < 2; k++)
-            o->tc[u][k] = (s16)wt_round(wa * a->tc[u][k] + wb * b->tc[u][k] + wc * c->tc[u][k], n);
-    for (int k = 0; k < 4; k++) o->nrm[k] = (s16)wt_round(wa * a->nrm[k] + wb * b->nrm[k] + wc * c->nrm[k], n);
+            o->tc[u][k] = (s16)wt_round(wa * a->tc[u][k] + wb * b->tc[u][k] + wc * c->tc[u][k], inv);
+    for (int k = 0; k < 4; k++) o->nrm[k] = (s16)wt_round(wa * a->nrm[k] + wb * b->nrm[k] + wc * c->nrm[k], inv);
 }
 
 static void wt_lerp_std(GxOutVertex* o, const GxOutVertex* a, const GxOutVertex* b, const GxOutVertex* c, int wa,
-                        int wb, int wc, int n) {
-    float fa = (float)wa / n, fb = (float)wb / n, fc = (float)wc / n;
+                        int wb, int wc, float inv) {
+    float fa = (float)wa * inv, fb = (float)wb * inv, fc = (float)wc * inv;
     for (int k = 0; k < 3; k++) o->pos[k] = fa * a->pos[k] + fb * b->pos[k] + fc * c->pos[k];
-    for (int k = 0; k < 4; k++) o->color[k] = (u8)wt_round(wa * a->color[k] + wb * b->color[k] + wc * c->color[k], n);
+    for (int k = 0; k < 4; k++) o->color[k] = (u8)wt_round(wa * a->color[k] + wb * b->color[k] + wc * c->color[k], inv);
     memcpy(o->idx, a->idx, sizeof(o->idx));
     for (int u = 0; u < GX_PICA_TEX_UNITS; u++)
         for (int k = 0; k < 2; k++) o->tc[u][k] = fa * a->tc[u][k] + fb * b->tc[u][k] + fc * c->tc[u][k];
-    for (int k = 0; k < 4; k++) o->nrm[k] = (s16)wt_round(wa * a->nrm[k] + wb * b->nrm[k] + wc * c->nrm[k], n);
+    for (int k = 0; k < 4; k++) o->nrm[k] = (s16)wt_round(wa * a->nrm[k] + wb * b->nrm[k] + wc * c->nrm[k], inv);
 }
 
 // Replaces *verts / *indices / *count with the tessellated draw (dynamic
@@ -1452,6 +1464,7 @@ static bool water_tessellate(bool packed, const void** verts, const u16** indice
         PROF_COUNT("gx.water_ripple_faded", 1);
     }
     u32 nv = 0, ni = 0;
+    float inv = 1.0f / (float)n;
     for (u32 t = 0; t < tris; t++) {
         u16 ia = idx[t * 3], ib = idx[t * 3 + 1], ic = idx[t * 3 + 2];
         u32 base = nv;
@@ -1461,13 +1474,13 @@ static bool water_tessellate(bool packed, const void** verts, const u16** indice
                 float uv[2] = { 0.0f, 0.0f }, p[3];
                 if (packed) {
                     GxPackedVertex* o = (GxPackedVertex*)ov + nv;
-                    wt_lerp_packed(o, &pv[ia], &pv[ib], &pv[ic], n - i - j, i, j, n);
+                    wt_lerp_packed(o, &pv[ia], &pv[ib], &pv[ic], n - i - j, i, j, inv);
                     for (int c = 0; c < 3; c++) p[c] = o->pos[c] * pos_scale;
                     if (ru >= 0) uv[0] = o->tc[ru][0] * tc_scale, uv[1] = o->tc[ru][1] * tc_scale;
                     water_ofs_vertex(&wo, uv, p, o->color);
                 } else {
                     GxOutVertex* o = (GxOutVertex*)ov + nv;
-                    wt_lerp_std(o, &sv[ia], &sv[ib], &sv[ic], n - i - j, i, j, n);
+                    wt_lerp_std(o, &sv[ia], &sv[ib], &sv[ic], n - i - j, i, j, inv);
                     if (ru >= 0) uv[0] = o->tc[ru][0], uv[1] = o->tc[ru][1];
                     water_ofs_vertex(&wo, uv, o->pos, o->color);
                 }
