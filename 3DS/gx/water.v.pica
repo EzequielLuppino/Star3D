@@ -23,13 +23,10 @@
 .fvec texsrc[3]       ; per slot: x = texcoord attribute, y = position, z = normal,
                       ; w = warp amplitude (4x the offset, in texture units)
 .fvec posscale        ; x: position scale (fixed-point inputs), y: normal input scale, z: texcoord scale
-.fvec texwarp         ; two modes, picked by texwarp.z (decode mode always has
-                      ; texwarp.zw = -128 k <= 0, wave mode carries wave_params
-                      ; with phase z > 0):
-                      ; - wave mode: bug 33's wave frequencies and phases, the
-                      ;   waves computed here from the object position;
-                      ; - decode mode: xy scale / zw bias of the colour-carried
-                      ;   offsets (gx_render.c computes them for the ripple)
+.fvec texwarp         ; decode mode: xy = scale of the colour-carried offsets,
+                      ; zw = bias (the ripple's z <= 0, the game's wave_params
+                      ; z in [0.5, 1.5)); wave mode: bug 33's wave frequencies
+                      ; and phases + 2 (the marker, z > 2)
 
 ; Constants
 .constf myconst(0.0, 1.0, 0.00392156862745, 0.0)
@@ -79,19 +76,20 @@
 	; vertex alpha)
 	mul outclr, inv255, inclr
 
-	; Warp offsets, two modes picked by texwarp.z (see the uniform comment):
-	; wave mode computes bug 33's travelling waves from the object position
-	; (the same math as warp.v.pica), so gx_render.c skips the per-vertex CPU
-	; offsets when the caustic ripple is off; decode mode decodes the
-	; CPU-calculated offsets (the GameCube's caustic reads at TEX0, bug 35)
-	; carried in the colour's red/green (texwarp = 0: no warp). The mad
-	; addend slot takes the uniform and cmp compares a temp, so texwarp goes
-	; through r11
+	; Warp offsets, two modes picked by texwarp.z: wave mode has the phases
+	; raised by 2 (z > 2, uploaded only by gx_render.c's non-ripple water
+	; path; frac ignores the +2, so the waves are unchanged). Everything else
+	; decodes (the game's wave_params stay in [0.5, 1.5) and the ripple's
+	; decode z <= 0, so the split's copy pass - which inherits the game's
+	; params - decodes exactly like the pre-wave-mode shader). Wave mode
+	; overwrites r10 with bug 33's travelling waves computed from the object
+	; position (the same math as warp.v.pica), so gx_render.c skips the
+	; per-vertex CPU offsets when the caustic ripple is off. The mad addend
+	; slot takes the uniform, so texwarp goes through r11
 	mov r11, texwarp
-	cmp zeros, gt, gt, r11.zzzz
-	ifc !cmp.x
-		mad r10.xy, inclr.xy, r11.xy, texwarp.zw
-	.end
+	mad r10.xy, inclr.xy, r11.xy, texwarp.zw
+	add r12.x, -twos, r11.z
+	cmp zeros, gt, gt, r12.xxxx
 	ifc cmp.x
 		add r10.xy, r0.xz, r0.yy
 		mad r10.xy, r10.xy, r11.xy, texwarp.zw
@@ -108,6 +106,8 @@
 	dp4 r3.y, texmtx[1], r0
 	dp4 r3.z, texmtx[2], r0
 	; The warp offset is added after the divide: (s + w q) / q = s / q + w
+	; (the wave amplitude in texsrc[0].w is capped on the CPU, so no clamp
+	; here)
 	mul r2.xy, texsrc[0].ww, r10.xy
 	mad r3.xy, r3.zz, r2.xy, r3.xy
 	mov outtc0.zw, zeros

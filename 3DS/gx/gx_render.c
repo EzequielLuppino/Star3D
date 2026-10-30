@@ -1200,8 +1200,43 @@ static void upload_texwarp(float len) {
     C3D_FVUnifSet(GPU_VERTEX_SHADER, s_loc_texwarp, w[0], w[1], w[2], w[3]);
 }
 
+// The water shader's wave mode: the same wave_params with the phases raised
+// by 2 (the marker water.v.pica tests, texwarp.z > 2). frac() ignores the +2,
+// so the waves are identical; the game's wave_params stay in [0.5, 1.5) and
+// the ripple decode's z is <= 0, so neither triggers the wave branch (the
+// split's copy pass inherits the game's params)
+static void upload_water_waves(float len) {
+    float w[4];
+    wave_params(len, w);
+    w[2] += 2.0f;
+    w[3] += 2.0f;
+    C3D_FVUnifSet(GPU_VERTEX_SHADER, s_loc_texwarp, w[0], w[1], w[2], w[3]);
+    s_wt_waves = true;  // water_tess_restore resets the default waves
+}
+
+// Wave mode carries the warp amplitude in texsrc[0].w (the shader multiplies
+// its waves by it, the max wave being 0.25). The CPU fallback clamps the
+// final offset to WATER_OFS_RANGE, so the amplitude is capped the same way:
+// 0.25 * 4 * WATER_OFS_RANGE keeps the offsets in range. Only the wave path
+// caps: the ripple's CPU-encoded offsets are already clamped.
+static void upload_water_amp(void) {
+    int coord = s_map.unit_texcoord[0];
+    const GxTexGen* tg = coord >= 0 && coord < g_gx.num_texgens ? &g_gx.texgen[coord] : NULL;
+    u8 src = tg ? tg->src : GX_TG_TEX0;
+    bool from_tc = src != GX_TG_POS && src != GX_TG_NRM;
+    float amp = 4.0f * s_map.unit_warp[0];
+    static bool logged;
+    if (!logged) {
+        logged = true;
+        LOG_WARN("water", "wave mode: unit_warp[0] %.3f, amp4 %.3f (cap %.3f)", s_map.unit_warp[0], amp,
+                 4.0 * WATER_OFS_RANGE);
+    }
+    if (amp > 4.0f * WATER_OFS_RANGE) amp = 4.0f * WATER_OFS_RANGE;
+    C3D_FVUnifSet(GPU_VERTEX_SHADER, s_loc_texsrc + 0, from_tc, src == GX_TG_POS, src == GX_TG_NRM, amp);
+}
+
 // The default waves back after a water draw (the next draw's prepare may
-// keep the uniform)
+// keep the uniform); the water shader goes back to decoding the colour
 static void water_tess_restore(void) {
     if (!s_wt_waves) return;
     upload_texwarp(48.0f);
@@ -1333,15 +1368,13 @@ static void water_ofs_setup(WaterOfs* w, float wave_len) {
 
 static inline u8 water_ofs_enc(float o) {
     // lroundf(128 + o * s) written with a truncating convert: non-tie values
-    // match exactly, exact ties can differ by 1 (invisible in the offset
-    // colour)
+    // match exactly, ties land on exact integers
     int c = (int)(128.5f + o * (127.0f / WATER_OFS_RANGE));
     return (u8)(c < 1 ? 1 : c > 255 ? 255 : c);
 }
 
 // Offsets of one vertex into color[0..1]: uv = TEX0, p = object position
-static void water_ofs_vertex(const WaterOfs* w, const float uv[2], const float p[3], u8* color) {
-    float du, dv;
+static void water_ofs_vertex(const WaterOfs* w, const float uv[2], const float p[3], u8* color) {    float du, dv;
     if (w->ripple) {
         float a[2], b[2];
         caustic_sample(w->m1[0][0] * uv[0] + w->m1[0][1] * uv[1] + w->m1[0][2] + w->m1[0][3],
@@ -1366,6 +1399,22 @@ static void water_ofs_vertex(const WaterOfs* w, const float uv[2], const float p
     }
     color[0] = water_ofs_enc(du);
     color[1] = water_ofs_enc(dv);
+}
+
+// The split's combiner multiplies the copy texture by the vertex colour
+// (GPU_PRIMARY_COLOR), so the wave mode still writes the fallback-wave
+// offsets into colour[0..1]: the shader computes the UV offsets itself from
+// the position, but the colour carries the brightness ripple the CPU path
+// had. Without it the input mesh colours (near black on the game's water)
+// multiply the copy to black.
+static void water_wave_color(const WaterOfs* w, const float p[3], u8* color) {
+    float r[2] = { w->waves[0] * (p[0] + p[1]) + w->waves[2], w->waves[1] * (p[2] + p[1]) + w->waves[3] };
+    for (int k = 0; k < 2; k++) {
+        float u = 2.0f * (r[k] - wt_floor(r[k])) - 1.0f;
+        r[k] = u * (1.0f - fabsf(u));
+    }
+    color[0] = water_ofs_enc(w->amp4 * r[0]);
+    color[1] = water_ofs_enc(w->amp4 * r[1]);
 }
 
 // Water grid interpolation: rounds sum/n half away from zero. ARM11 has no
@@ -1438,8 +1487,8 @@ static bool water_tessellate(bool packed, const void** verts, const u16** indice
         // when the ripple is off - water.v.pica's wave mode computes them at
         // the mesh's own vertices (coarse, but moving)
         if (!(s_wt_ripple && s_map.ripple_unit >= 0)) {
-            upload_texwarp(s_wt_wave > 0 ? (float)s_wt_wave : 20.0f);
-            s_wt_waves = true;  // water_tess_restore resets the default waves
+            upload_water_waves(s_wt_wave > 0 ? (float)s_wt_wave : 20.0f);
+            upload_water_amp();
         }
         return true;
     }
@@ -1512,15 +1561,19 @@ static bool water_tessellate(bool packed, const void** verts, const u16** indice
                 if (packed) {
                     GxPackedVertex* o = (GxPackedVertex*)ov + nv;
                     wt_lerp_packed(o, &pv[ia], &pv[ib], &pv[ic], n - i - j, i, j, inv);
-                    if (!vsh_waves) {
-                        for (int c = 0; c < 3; c++) p[c] = o->pos[c] * pos_scale;
+                    for (int c = 0; c < 3; c++) p[c] = o->pos[c] * pos_scale;
+                    if (vsh_waves) {
+                        water_wave_color(&wo, p, o->color);
+                    } else {
                         if (ru >= 0) uv[0] = o->tc[ru][0] * tc_scale, uv[1] = o->tc[ru][1] * tc_scale;
                         water_ofs_vertex(&wo, uv, p, o->color);
                     }
                 } else {
                     GxOutVertex* o = (GxOutVertex*)ov + nv;
                     wt_lerp_std(o, &sv[ia], &sv[ib], &sv[ic], n - i - j, i, j, inv);
-                    if (!vsh_waves) {
+                    if (vsh_waves) {
+                        water_wave_color(&wo, o->pos, o->color);
+                    } else {
                         if (ru >= 0) uv[0] = o->tc[ru][0], uv[1] = o->tc[ru][1];
                         water_ofs_vertex(&wo, uv, o->pos, o->color);
                     }
@@ -1555,8 +1608,8 @@ static bool water_tessellate(bool packed, const void** verts, const u16** indice
     // Wave mode: the shader multiplies the waves it computes by texsrc[0].w
     // (the amplitude) itself; decode mode carries the offsets in the colour
     if (vsh_waves) {
-        upload_texwarp(wo.wave_len);
-        s_wt_waves = true;  // water_tess_restore resets the default waves
+        upload_water_waves(wo.wave_len);
+        upload_water_amp();
     } else {
         upload_water_decode(wo.amp4);
     }
