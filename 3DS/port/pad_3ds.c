@@ -21,6 +21,7 @@ static bool g_input_initialized = false;
 static void update_analog_sticks(void);
 static void update_digital_buttons(void);
 static void update_triggers(void);
+static s8 scale_axis(s16 value);  // padrec_frame uses it before its definition
 
 // --- Input record / playback (env, default off) --------------------------
 // S3D_PAD_RECORD=1 records the effective input of every PADRead (buttons,
@@ -47,7 +48,6 @@ typedef struct {
 static PadRecFrame* s_padrec;
 static u32 s_padrec_count, s_padrec_cap, s_padrec_idx;
 static bool s_padrec_recording, s_padrec_playing;
-static bool s_padrec_due;  // padrec_frame(): this game frame's slot is due
 
 static void padrec_reserve(u32 need) {
     if (need <= s_padrec_cap) return;
@@ -85,12 +85,55 @@ void padrec_flush(void) {
     if (s_padrec_count) padrec_write();  // Even if the recording stopped early
 }
 
-// Once per game frame from the vi loop: the next PADRead records this
-// frame's input (recording) or advances to the next recorded frame
-// (playback). Frame-aligned, so the route replays faithfully even when the
-// frame rate drifts between runs.
+// Once per game frame from the vi loop: capture this frame's effective
+// input (hardware buttons/stick, remote commands and the touch menu - the
+// same sources PADRead composes) when recording. Capturing here, not inside
+// PADRead, is what makes the recorded stream faithful: the game's PADRead
+// calls are not a reliable sample point (the first take of this version
+// captured a constant idle stick and no buttons).
 void padrec_frame(void) {
-    s_padrec_due = true;
+    if (!s_padrec_recording) return;
+    hidScanInput();
+    u32 keys = hidKeysHeld();
+    u16 btn = 0;
+    if (keys & KEY_A) btn |= PAD_BUTTON_A;
+    if (keys & KEY_B) btn |= PAD_BUTTON_B;
+    if (keys & KEY_X) btn |= PAD_BUTTON_X;
+    if (keys & KEY_Y) btn |= PAD_BUTTON_Y;
+    if (keys & KEY_START) btn |= PAD_BUTTON_START;
+    if (keys & KEY_L) btn |= PAD_TRIGGER_L;
+    if (keys & KEY_R) btn |= PAD_TRIGGER_R;
+    if (keys & KEY_ZR) btn |= PAD_TRIGGER_Z;
+    if (keys & KEY_DUP) btn |= PAD_BUTTON_UP;
+    if (keys & KEY_DDOWN) btn |= PAD_BUTTON_DOWN;
+    if (keys & KEY_DLEFT) btn |= PAD_BUTTON_LEFT;
+    if (keys & KEY_DRIGHT) btn |= PAD_BUTTON_RIGHT;
+    btn |= remote_pad_buttons;
+    s8 vx = 0, vy = 0;
+    u16 vb = 0;
+    touchui_pad_state(&vx, &vy, &vb);
+    btn |= vb;
+    circlePosition cp;
+    hidCircleRead(&cp);
+    s8 sx = scale_axis(cp.dx), sy = scale_axis(cp.dy);
+    if (remote_stick[0] || remote_stick[1]) {
+        sx = remote_stick[0];
+        sy = remote_stick[1];
+    }
+    padrec_reserve(s_padrec_count + 1);
+    if (s_padrec) {
+        PadRecFrame* f = &s_padrec[s_padrec_count++];
+        f->button = btn;
+        f->stickX = sx;
+        f->stickY = sy;
+        f->substickX = vx;
+        f->substickY = vy;
+        f->analogA = (keys & KEY_A) ? 255 : 0;
+        f->analogB = (keys & KEY_B) ? 255 : 0;
+        f->triggerL = (keys & KEY_L) ? 255 : 0;
+        f->triggerR = (keys & KEY_R) ? 255 : 0;
+        f->ms = (u32)osGetTime();
+    }
 }
 
 static void padrec_init(void) {
@@ -220,25 +263,8 @@ u32 PADRead(PADStatus* status) {
         }
     }
 
-    // Record: the effective input the game receives (hardware + remote +
-    // touch menu, or the played-back route), once per game frame
-    if (s_padrec_recording && s_padrec_due) {
-        s_padrec_due = false;
-        padrec_reserve(s_padrec_count + 1);
-        if (s_padrec) {
-            PadRecFrame* f = &s_padrec[s_padrec_count++];
-            f->button = g_pad_status.button;
-            f->stickX = g_pad_status.stickX;
-            f->stickY = g_pad_status.stickY;
-            f->substickX = g_pad_status.substickX;
-            f->substickY = g_pad_status.substickY;
-            f->analogA = g_pad_status.analogA;
-            f->analogB = g_pad_status.analogB;
-            f->triggerL = g_pad_status.triggerLeft;
-            f->triggerR = g_pad_status.triggerRight;
-            f->ms = (u32)osGetTime();
-        }
-    }
+    // Record: the vi loop captures the frame's input (padrec_frame), so
+    // PADRead only plays back here.
 
     // The game passes an array of PAD_MAX_CONTROLLERS entries; the 3DS only
     // has one controller, so channels 1-3 report as disconnected.
