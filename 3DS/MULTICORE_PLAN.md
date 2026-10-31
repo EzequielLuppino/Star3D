@@ -4360,3 +4360,39 @@ dlcall prepare 5.0 ms (state setup; ~50 KCOL dirties/frame, ~27 with
 TEV/TEX on top - the GX_PROFILE_DETAIL prep.d_* counters need a PROFILE=1
 build to break it down), dlcall draws 7.0 ms (play_entry submission),
 drawc draw 5.7 ms, lookup 1.6, uncached 1.6.
+
+## Input record/playback: S3D_PAD_RECORD / S3D_PAD_PLAY (2026-10-30/31)
+
+Records the effective input (buttons, sticks, triggers - hardware, remote
+commands and the touch menu) and replays it hands off, so a played route can
+be re-run under different configs/builds for A/B tests and captures.
+
+Iterations (each broken in its own way):
+1. Per-PADRead capture: the game polls PADRead thousands of times per second
+   during loading, so the buffer OOM'd in seconds.
+2. 15 ms wall-clock gate: the replay diverged (the game's frame cadence
+   drifts between runs, so it sampled different points of the stream).
+3. Per-game-frame (vi loop) with the capture inside PADRead: the stream
+   contained a constant idle stick and no buttons - PADRead is not a
+   reliable sample point.
+4. Timestamped wall-clock playback: froze in a menu (the game's load timing
+   differs, so the inputs land at wrong menu states).
+5. **Working**: padrec_frame (vi loop) captures the composed input once per
+   frame; playback advances one recorded frame per game frame AND paces the
+   frame to the recorded timestamp (svcSleepThread slices). Frame-aligned
+   inputs make the frame-based menus navigate exactly like the recording;
+   the paced frame rate keeps the delta-time physics on the recorded path.
+
+Usage: record with S3D_PAD_RECORD=1 (play the route, quit cleanly - the
+buffer flushes to sdmc:/3ds/star3d/padrec.bin at shutdown), replay with
+S3D_PAD_PLAY=1 (the recorded route drives the game from the title; when the
+stream ends the real inputs return). SELECT logs a "pmark" line (position,
+no capture) for marking spots. Verification: the replayed map-7 load
+matched the recording to the frame (f587 vs f588), and the asset-load
+sequence matched for 137 loads with only the last ~15 s drifting (the
+airwing takeoff prompt vs the shopkeeper talk - accumulated physics
+micro-drift). Open issues while roaming: the DL-cache entry free can crash
+(a corrupted heap block - S3D_DL_CACHE=0 avoids it, at the cost of bug 36's
+missing geometry), and the render capture (L+R+SELECT mark) can crash the
+kernel (deterministic prefetch abort in the kernel, dumps 5/6) - see the
+capture bug entry.
