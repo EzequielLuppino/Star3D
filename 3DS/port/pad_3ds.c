@@ -41,7 +41,8 @@ typedef struct {
     u16 button;
     s8 stickX, stickY, substickX, substickY;
     u8 analogA, analogB, triggerL, triggerR;
-} PadRecFrame;  // 10 bytes
+    u32 ms;  // osGetTime() when this frame was recorded (playback pacing)
+} PadRecFrame;  // 16 bytes
 
 static PadRecFrame* s_padrec;
 static u32 s_padrec_count, s_padrec_cap, s_padrec_idx;
@@ -107,6 +108,13 @@ static void padrec_init(void) {
         fseek(f, 0, SEEK_END);
         long size = ftell(f);
         fseek(f, 0, SEEK_SET);
+        if (size % (long)sizeof(PadRecFrame) != 0) {
+            LOG_ERROR("pad", "padrec: %s has %ld bytes, not a multiple of %lu (old format?)", PADREC_PATH, size,
+                      (unsigned long)sizeof(PadRecFrame));
+            fclose(f);
+            s_padrec_playing = false;
+            return;
+        }
         s_padrec_count = (u32)(size / (long)sizeof(PadRecFrame));
         s_padrec = (PadRecFrame*)malloc((size_t)s_padrec_count * sizeof(PadRecFrame));
         if (!s_padrec) {
@@ -171,19 +179,31 @@ u32 PADRead(PADStatus* status) {
     g_pad_status.button |= vbuttons;
     if (vbuttons & PAD_BUTTON_A) g_pad_status.analogA = 255;
 
-    // Playback: advance one recorded frame per game frame (padrec_frame
-    // marks the slot due) and hold it, so the recorded route wins over the
-    // real inputs even if the game polls PAD several times per frame
+    // Playback: the recorded inputs apply at their recorded wall-clock times
+    // (the game's physics are delta-time based, so the input timeline, not
+    // the frame count, keeps the route faithful when the frame rate drifts
+    // between runs). The held frame wins over the real inputs even if the
+    // game polls PAD several times per frame.
     if (s_padrec_playing) {
         static PadRecFrame held;
         static bool have;
-        if (s_padrec_due) {
-            s_padrec_due = false;
+        static u64 t0;
+        u64 now = osGetTime();
+        if (!have) {
             if (s_padrec_idx < s_padrec_count) {
                 held = s_padrec[s_padrec_idx++];
                 have = true;
+                t0 = now;
             } else {
-                s_padrec_playing = false;  // Route over: real inputs return
+                s_padrec_playing = false;  // Empty file
+            }
+        } else {
+            u32 elapsed = (u32)(now - t0);
+            while (s_padrec_idx < s_padrec_count && elapsed >= s_padrec[s_padrec_idx].ms - held.ms)
+                held = s_padrec[s_padrec_idx++];
+            if (s_padrec_idx >= s_padrec_count) {
+                memset(&held, 0, sizeof(held));  // Route over: real inputs return
+                s_padrec_playing = false;
                 have = false;
             }
         }
@@ -216,6 +236,7 @@ u32 PADRead(PADStatus* status) {
             f->analogB = g_pad_status.analogB;
             f->triggerL = g_pad_status.triggerLeft;
             f->triggerR = g_pad_status.triggerRight;
+            f->ms = (u32)osGetTime();
         }
     }
 
