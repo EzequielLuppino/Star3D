@@ -27,7 +27,11 @@
 // vertex shading
 static int cull_setting(void) {
     static int v = -1;
-    CFG_LIVE(v, cfg_int("S3D_CULL", 1));
+    // Default off: the culling eats faces the game draws (bug 41 - the user
+    // sees backface errors everywhere with it on, and clean with it off), so
+    // correctness wins by default; the 30 fps cuts env sets S3D_CULL=1 for
+    // the GPU saving. Value 2 is the opposite winding (drops front faces).
+    CFG_LIVE(v, cfg_int("S3D_CULL", 0));
     return v;
 }
 
