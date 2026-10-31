@@ -26,7 +26,8 @@ void* port_mem1_base(void);  // PORT_MEM1_SIZE bytes
 void* ARGetStorageAddress(void);
 uint32_t port_aram_used(void);
 void port_shutdown_and_exit(int code) __attribute__((noreturn));
-void padrec_flush(void);  // pad_3ds.c: write the recorded input at shutdown
+void padrec_flush(void);   // pad_3ds.c: write the recorded input at shutdown
+void padrec_frame(void);   // pad_3ds.c: once per game frame (record/playback slot)
 
 // vi_3ds.c
 void port_frame_pump_init(void);

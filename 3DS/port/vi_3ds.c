@@ -150,6 +150,7 @@ void VIWaitForRetrace(void) {
 
     WD_PHASE("vi: input / touch UI");
     hidScanInput();
+    padrec_frame();  // This frame's record/playback slot (pad_3ds.c)
     // Hardware or remote (cmd.txt "press SC") START+SELECT quits. The remote
     // pad uses dolphin PAD bits (SELECT = PAD_BUTTON_SELECT), hardware KEY_*.
     {
