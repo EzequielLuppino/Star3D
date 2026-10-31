@@ -48,6 +48,8 @@ typedef struct {
 static PadRecFrame* s_padrec;
 static u32 s_padrec_count, s_padrec_cap, s_padrec_idx;
 static bool s_padrec_recording, s_padrec_playing;
+static PadRecFrame s_padrec_held;
+static bool s_padrec_have;  // The frame's input, held for the game's PADReads
 
 static void padrec_reserve(u32 need) {
     if (need <= s_padrec_cap) return;
@@ -91,7 +93,33 @@ void padrec_flush(void) {
 // PADRead, is what makes the recorded stream faithful: the game's PADRead
 // calls are not a reliable sample point (the first take of this version
 // captured a constant idle stick and no buttons).
+//
+// When playing back, this also advances the held frame once per game frame
+// and paces the frame to the recorded cadence: the frame-aligned inputs make
+// the frame-based menus navigate exactly like the recording, and the paced
+// frame rate keeps the delta-time physics on the same path (the first
+// replays diverged at warps because the game ran at a different frame rate).
 void padrec_frame(void) {
+    if (s_padrec_playing) {
+        static u64 t0;
+        if (!s_padrec_have) {
+            if (s_padrec_idx < s_padrec_count) {
+                s_padrec_held = s_padrec[s_padrec_idx++];
+                s_padrec_have = true;
+                t0 = osGetTime();
+            } else {
+                s_padrec_playing = false;  // Empty file
+            }
+        } else if (s_padrec_idx < s_padrec_count) {
+            u64 due = t0 + (s_padrec[s_padrec_idx].ms - s_padrec[0].ms);
+            while (osGetTime() < due) svcSleepThread(1000000);  // 1 ms slices
+            s_padrec_held = s_padrec[s_padrec_idx++];
+        } else {
+            memset(&s_padrec_held, 0, sizeof(s_padrec_held));
+            s_padrec_playing = false;  // Route over: real inputs return
+            s_padrec_have = false;
+        }
+    }
     if (!s_padrec_recording) return;
     hidScanInput();
     u32 keys = hidKeysHeld();
@@ -222,45 +250,19 @@ u32 PADRead(PADStatus* status) {
     g_pad_status.button |= vbuttons;
     if (vbuttons & PAD_BUTTON_A) g_pad_status.analogA = 255;
 
-    // Playback: the recorded inputs apply at their recorded wall-clock times
-    // (the game's physics are delta-time based, so the input timeline, not
-    // the frame count, keeps the route faithful when the frame rate drifts
-    // between runs). The held frame wins over the real inputs even if the
-    // game polls PAD several times per frame.
-    if (s_padrec_playing) {
-        static PadRecFrame held;
-        static bool have;
-        static u64 t0;
-        u64 now = osGetTime();
-        if (!have) {
-            if (s_padrec_idx < s_padrec_count) {
-                held = s_padrec[s_padrec_idx++];
-                have = true;
-                t0 = now;
-            } else {
-                s_padrec_playing = false;  // Empty file
-            }
-        } else {
-            u32 elapsed = (u32)(now - t0);
-            while (s_padrec_idx < s_padrec_count && elapsed >= s_padrec[s_padrec_idx].ms - held.ms)
-                held = s_padrec[s_padrec_idx++];
-            if (s_padrec_idx >= s_padrec_count) {
-                memset(&held, 0, sizeof(held));  // Route over: real inputs return
-                s_padrec_playing = false;
-                have = false;
-            }
-        }
-        if (have) {
-            g_pad_status.button = held.button;
-            g_pad_status.stickX = held.stickX;
-            g_pad_status.stickY = held.stickY;
-            g_pad_status.substickX = held.substickX;
-            g_pad_status.substickY = held.substickY;
-            g_pad_status.analogA = held.analogA;
-            g_pad_status.analogB = held.analogB;
-            g_pad_status.triggerLeft = held.triggerL;
-            g_pad_status.triggerRight = held.triggerR;
-        }
+    // Playback: apply the frame's held recorded input (advanced by
+    // padrec_frame), so the route wins over the real inputs even if the game
+    // polls PAD several times per frame
+    if (s_padrec_have) {
+        g_pad_status.button = s_padrec_held.button;
+        g_pad_status.stickX = s_padrec_held.stickX;
+        g_pad_status.stickY = s_padrec_held.stickY;
+        g_pad_status.substickX = s_padrec_held.substickX;
+        g_pad_status.substickY = s_padrec_held.substickY;
+        g_pad_status.analogA = s_padrec_held.analogA;
+        g_pad_status.analogB = s_padrec_held.analogB;
+        g_pad_status.triggerLeft = s_padrec_held.triggerL;
+        g_pad_status.triggerRight = s_padrec_held.triggerR;
     }
 
     // Record: the vi loop captures the frame's input (padrec_frame), so
