@@ -960,38 +960,14 @@ void touchui_draw(void) {
         LOG_INFO("touchui", "tab %d (%s)", s_tab, s_tab == TAB_SETTINGS ? "settings" : s_tab == TAB_MAP ? "map" : "cheats");
     }
     if (s_failed || !draw) return;
-    // Skip unchanged frames: the touch screen content is static while the
-    // menu is closed, nothing is touched and the item counts and settings
-    // did not change. A safety net redraws every 30 frames.
-    static u32 s_drawn_gen, s_drawn_cfggen, s_drawn_frame;
-    static RingCount s_drawn_counts[RING_COUNTS];
-    static int s_drawn_ncounts;
-    static bool s_drawn_valid;
-    u32 gen = s_ui_gen;
-    if (!cmenu_ready() && !cmenu_closed()) gen++;  // Ring open/close animation
-    if (cfg_gen() != s_drawn_cfggen) gen++;        // Live settings may be listed
-    const RingCount* cur = s_counts[s_counts_pub];
-    int ncur = s_ncounts[s_counts_pub];
-    bool counts_same = s_drawn_valid && ncur == s_drawn_ncounts &&
-                       memcmp(cur, s_drawn_counts, (size_t)ncur * sizeof(RingCount)) == 0;
-    bool skip = s_drawn_valid && gen == s_drawn_gen && counts_same && s_vstick_frames == 0 && s_va_frames == 0 &&
-                prof_frame_count() - s_drawn_frame < 30;
-    if (s_drawn_valid && !skip) {
-        if (gen != s_drawn_gen) PROF_COUNT("touchui.noskip_gen", 1);
-        if (!counts_same) PROF_COUNT("touchui.noskip_counts", 1);
-        if (s_vstick_frames || s_va_frames) PROF_COUNT("touchui.noskip_pulse", 1);
-        if (prof_frame_count() - s_drawn_frame >= 30) PROF_COUNT("touchui.noskip_net", 1);
-    }
-    if (skip) {
-        PROF_COUNT("touchui.skips", 1);
-        return;
-    }
-    s_drawn_valid = true;
-    s_drawn_gen = gen;
-    s_drawn_cfggen = cfg_gen();
-    s_drawn_frame = prof_frame_count();
-    s_drawn_ncounts = ncur;
-    memcpy(s_drawn_counts, cur, (size_t)ncur * sizeof(RingCount));
+    // The UI redraws every frame. The bottom target's color is cleared every
+    // frame (gx_init.c), so anything not redrawn disappears; the earlier
+    // "skip unchanged frames" optimization made the whole touch UI blink at
+    // its 30-frame safety-net cadence (the content lived for one frame after
+    // each net redraw, then the clear wiped it for 29). The expensive part of
+    // the redraw - parsing and optimizing every row's text - is already
+    // memoized (text_cached, S3D_RT_MEMO bit 8), so the remaining cost is the
+    // vertex emission of a few dozen rects and texts.
     WD_PHASE("touchui: ui begin (flush, GPU wait)");
     C3D_RenderTarget* target = gx_ui_begin();
     if (!target) return;
