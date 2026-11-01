@@ -4532,3 +4532,22 @@ fallback (waves stretched over the mesh's huge triangles) and the
 settings.txt pollution (a touch-menu save during the cut profile
 persisted the cuts; the restore and the shutdown now write the boot
 values back).
+
+## Recorder round 2: the hash move, and where the wall really is (2026-11-01)
+
+At the user's busy hub spot (probe, ~58 ms frames):
+- The game thread records ~750 UNIQUE display lists per frame, so the
+  per-frame hash memo never hit; the hashing (gx_dl_call_hashed ~6 ms of
+  the ~21 ms recorder cost) moved to the render thread (mask-0 records,
+  the fallback hashing already existed). Game thread: recorder ops 21.4
+  -> 15.7 ms (-5.7); the render thread absorbed it.
+- Net frame unchanged (58.24 -> 58.03 ms): the render thread was already
+  nearly the wall too. Its CPU at this spot is ~40 ms of rt.replay
+  (GPU p3d only 30.8 ms), spread across per-draw work - dl.lookup 4.9,
+  immediate 4.2, gather16 4.0, dl.segment 3.6, uniforms 3.5, render-side
+  state delta 3.2, displaylist 2.6, validate 2.4, draw 2.4 ms. Death by
+  a thousand cuts: ~750 DL calls, ~1500 immediate chunks, ~650 segments,
+  ~1570 state deltas a frame. The next targets: why S3D_DL_BATCH forms
+  only ~10 batches a frame when the batchable models (flag 0x8000) exist,
+  and the per-draw uniform/state-apply work. The hash move stays: it
+  lightens the game thread (helps game-bound spots) at no net cost here.
