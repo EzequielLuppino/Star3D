@@ -4577,3 +4577,18 @@ The user's replay route on the console (probe, build AC7D2521):
   render thread idles ~25 ms/frame waiting for the game
 The remaining walls: the game's own per-object code (~40 ms of C logic)
 and the GPU - the translation layer is no longer the bottleneck.
+
+## Game function timings (PERF_WRAP, the user's route, 2026-11-01)
+
+The per-function split of the game thread's own time (ms/frame, the
+route's hub section; the PERF_WRAP build adds ~3 us per wrapped call):
+sceneRender 35.1 (the sum), objRender 16.1, sceneDrawTransparentPolys
+11.8, renderMapBlock 6.6, Obj_UpdateAllObjects 5.4, drawGlow 3.4,
+objRenderFuzz 1.5, gameTextRun 1.3, curUiDllDraw 1.3, objShadowRender
+0.9, joint matrices 0.7. The material-cache candidates: the per-object
+setup inside objRender, the transparent-pass setup, and the map-block
+shader setup (setupToRenderMapBlock) - each rebuilds the material every
+frame though it is static per object/block. The cache patch: wrap the
+setup calls with port_mat_cached/store/apply, where store snapshots the
+GX state (the delta shadow's regions) and apply re-feeds it through the
+shadow so the render side sees the state without the game rebuilding it.
