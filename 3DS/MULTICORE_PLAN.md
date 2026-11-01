@@ -4476,3 +4476,20 @@ itself. The GPU wall (~59 ms at that spot) needs the other levers next:
 S3D_STEREO_REDUCED (half the fur/grass layers + no blur in the right
 eye), the water grid's GPU cost (12k tessellated triangles x 2 eyes -
 S3D_WATER_TESS), shadows, and the game-thread recorder (~17 ms).
+
+## Full-quality effect costs, live-measured (2026-11-01)
+
+Remote live A/Bs at one hub spot (stereo, gpu.p3d_us ~66-73 ms/frame =
+~14-15 fps):
+- S3D_SHADOWS: 71.4 -> 66.4 ms (the shadow pass costs ~5 ms GPU)
+- S3D_GRASS_BUDGET 8 -> 0: ~2 ms
+- S3D_WATER_TESS 16 -> 8: ~0.8 ms at this spot (bigger at the pond, where
+  the grid's 12k tris are on screen)
+- S3D_CULL (now default on): ~0.3-0.5 ms at this spot (scene-dependent)
+- S3D_STEREO_REDUCED and S3D_LOWRES: no-op deltas (the latter is mono-only
+  by design; the former's fur/grass saving is small at this spot)
+The GPU is vertex-bound in stereo: the second eye doubles the vertex work,
+so no small lever closes the gap to 30 fps in 3D at full quality. In mono
+the GPU would be ~half (~33-37 ms) = 2D full quality near 30 fps. The
+paths to 30 fps stay: 2D full quality, the cuts env for 3D, or new GPU
+work (per-eye vertex reduction).
