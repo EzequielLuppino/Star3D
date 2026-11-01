@@ -151,3 +151,21 @@ safe from the first frame.
 Order: 1) the call sites in objprint_dolphin.c (the render-op loop),
 2) the port module (matcache_3ds.c: cached/store/apply + the shadow
 integration), 3) Azahar correctness, 4) the PERF_WRAP measurement.
+
+## Object material cache: blocked by the setup's input web (2026-11-01)
+
+The setup's inputs are not enumerable safely: objSetupRenderOpGxState
+consumes the bit stream (the per-object render instructions, advancing
+it - a cached path would have to replay the exact advance), the object's
+animation state, the game's own state caches (gObjGxKColorCache,
+gObjCachedModel, gObjOverrideColor...), the light count, the fog and
+the shadow state. A game-side key built from those expressions would
+break on every upstream change and miss an input on the first miss.
+
+The realizable version is the fork proper: split the setup into the
+material (a pure function of the static model data - the TEV stage
+builders addSphereMapTexStage / addEnvMapBumpStages /
+addLightTexReg2Stage) and the per-object state (the matrices, the
+animation, the lights). The material then builds once per render-op and
+the port caches it. That is the next fork slice - a multi-session
+rewrite of objSetupRenderOpGxState with the GX fallback intact.
