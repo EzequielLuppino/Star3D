@@ -1180,6 +1180,28 @@ static u32 rec_array_hash(const void* data, u32 size) {
     return memo[slot].hash;
 }
 
+// Content hash of a display list on the game thread, memoized for the frame
+// like the array hash above: the same list is drawn many times per frame
+// (the batchable models), and its bytes do not change between calls within
+// a frame. The probe measured the list hashing at ~6 ms of the game thread's
+// ~21 ms recorder cost (750 calls x ~8 us).
+static u32 rec_list_hash(const void* list, u32 nbytes) {
+    enum { MEMO = 64 };
+    static struct {
+        const void* data;
+        u32 size, frame, hash;
+    } memo[MEMO];
+    u32 frame = prof_frame_count() + 1;  // 0 never matches an empty slot
+    u32 slot = ((uintptr_t)list >> 4) % MEMO;
+    if (memo[slot].data != list || memo[slot].size != nbytes || memo[slot].frame != frame) {
+        memo[slot].data = list;
+        memo[slot].size = nbytes;
+        memo[slot].frame = frame;
+        memo[slot].hash = gx_dl_list_hash(list, nbytes);
+    }
+    return memo[slot].hash;
+}
+
 // The display list cache's game-memory hashes (list bytes, indexed vertex
 // arrays) are computed here, on the game thread, which has time to spare
 // while the render thread is the bottleneck (MULTICORE_PLAN.md)
@@ -1199,7 +1221,7 @@ void __wrap_GXCallDisplayList(const void* list, u32 nbytes) {
     {
         GX_PROF_ZONE("rt.dl_prehash");
         PTAG_LEAF(PL_DLHASH);
-        h[0] = gx_dl_list_hash(list, nbytes);
+        h[0] = rec_list_hash(list, nbytes);
         for (int a = GX_VA_POS; a <= GX_VA_TEX7; a++) {
             u8 desc = gxrec_delta_vtx_desc(a);
             const void* data = gxrec_delta_array_data(a);
