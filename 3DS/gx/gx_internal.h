@@ -276,9 +276,6 @@ void gxrec_delta_apply(const u32* p, u32 words);
 // clears the pending state; returns the word counts. Single-threaded: the
 // buffer stays valid until the next take or flush.
 const u32* gxrec_delta_take(u32* mwords, u32* dwords);
-// The immediate-stream fallback (lines/points expand on the render side):
-// a self-contained op with the primitive, format, count and raw bytes
-void gxrec_put_imm_expand(GXPrimitive prim, u8 fmt, u16 count, const void* data, u32 n);
 void gxrec_delta_mblk_apply(const u32* p, u32 words);
 void gxrec_delta_refresh(void);
 void gxrec_delta_frame_begin(void);

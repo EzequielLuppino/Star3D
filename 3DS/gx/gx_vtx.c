@@ -12,7 +12,6 @@
 #include <string.h>
 #include "gx_diag.h"
 #include "gx_internal.h"
-#include "gx_rec.h"
 #include "log.h"
 #include "profiler.h"
 
@@ -178,12 +177,6 @@ static u32 s_imm_expected;  // Bytes of the primitive started by GXBegin
 static int layout_size(u8 vtxfmt);
 static void imm_submit(void);
 
-// The emission (RENDERER_CHANNEL.md stage C): while recording, the game
-// thread runs the immediate-stream decode into the frame batch instead of
-// shipping the raw bytes to the render thread, so the map lookup stays pure
-// (the render thread applies the state itself when it flushes the batch)
-static bool s_game_decode;
-
 static u8* s_dl_buf;
 static u32 s_dl_size;
 static u32 s_dl_len;
@@ -233,19 +226,6 @@ void GXBegin(GXPrimitive type, GXVtxFmt vtxfmt, u16 nverts) {
 static void imm_submit(void) {
     GX_PROF_ZONE("gx.immediate");
     s_imm_active = false;
-    if (gxrec_recording()) {
-        // The emission: decode on the game thread into the frame batch (the
-        // render thread flushes it in order); the expand path and the DL
-        // capture keep the raw-byte recording
-        if (s_imm_prim == GX_LINES || s_imm_prim == GX_LINESTRIP || s_imm_prim == GX_POINTS) {
-            gxrec_put_imm_expand(s_imm_prim, s_imm_fmt, s_imm_count, s_imm_buf, s_imm_len);
-            return;
-        }
-        s_game_decode = true;
-        gx_vtx_draw_stream(s_imm_prim, s_imm_fmt, s_imm_count, s_imm_buf, s_imm_len, NULL);
-        s_game_decode = false;
-        return;
-    }
     gx_vtx_draw_stream(s_imm_prim, s_imm_fmt, s_imm_count, s_imm_buf, s_imm_len, NULL);
 }
 
@@ -569,7 +549,7 @@ void gx_vtx_draw_stream(GXPrimitive prim, u8 vtxfmt, u16 count, const u8* data, 
         return;
     }
 
-    const GxUnitMap* map = s_game_decode ? gx_render_unit_map() : gx_render_prepare();
+    const GxUnitMap* map = gx_render_prepare();
     u16* indices;
     u16 base;
     GxOutVertex* out;
