@@ -19,10 +19,20 @@
 #include <stdlib.h>
 #include <string.h>
 #include "config.h"
+#include "dl_guard.h"
 #include "gx_diag.h"
 #include "gx_internal.h"
 #include "heaptrack_3ds.h"
 #include "log.h"
+
+// Every side-table allocation in this file goes through the guarded heap
+// (dl_guard.c): blocks carry magic head/tail words checked at free time, so
+// the corrupted-heap crash mode (bug 39) reports which table and entry the
+// corruption belongs to instead of faulting inside _free_r. free_entry calls
+// dl_free directly with the table names; everything else reports "dl".
+#define malloc(n) dl_alloc(n)
+#define realloc(p, n) dl_realloc((p), (n))
+#define free(p) dl_free((p), "dl", NULL)
 #include "profiler.h"
 
 #define DLCACHE_SLOTS       2048
@@ -385,23 +395,23 @@ static void free_entry(DlEntry* e) {
     e->bt_idx = NULL;
     e->bt_state = 0;
     e->bt_miss = 0;
-    free(e->segs);
-    free(e->ops);
-    free(e->pos_idx);
-    free(e->nrm_idx);
-    free(e->runs);
-    free(e->pos_snap);
-    free(e->nrm_snap);
-    free(e->pos_map_off);
-    free(e->pos_map);
-    free(e->nrm_map_off);
-    free(e->nrm_map);
-    free(e->pos_refs);
-    free(e->nrm_refs);
-    free(e->pos_hot);
-    free(e->nrm_hot);
-    free(e->pos_hot_list);
-    free(e->nrm_hot_list);
+    dl_free(e->segs, "segs", e);
+    dl_free(e->ops, "ops", e);
+    dl_free(e->pos_idx, "pos_idx", e);
+    dl_free(e->nrm_idx, "nrm_idx", e);
+    dl_free(e->runs, "runs", e);
+    dl_free(e->pos_snap, "pos_snap", e);
+    dl_free(e->nrm_snap, "nrm_snap", e);
+    dl_free(e->pos_map_off, "pos_map_off", e);
+    dl_free(e->pos_map, "pos_map", e);
+    dl_free(e->nrm_map_off, "nrm_map_off", e);
+    dl_free(e->nrm_map, "nrm_map", e);
+    dl_free(e->pos_refs, "pos_refs", e);
+    dl_free(e->nrm_refs, "nrm_refs", e);
+    dl_free(e->pos_hot, "pos_hot", e);
+    dl_free(e->nrm_hot, "nrm_hot", e);
+    dl_free(e->pos_hot_list, "pos_hot_list", e);
+    dl_free(e->nrm_hot_list, "nrm_hot_list", e);
     e->pos_refs = e->nrm_refs = NULL;
     e->pos_hot = e->nrm_hot = NULL;
     e->pos_hot_list = e->nrm_hot_list = NULL;
