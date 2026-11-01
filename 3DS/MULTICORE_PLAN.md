@@ -4493,3 +4493,17 @@ so no small lever closes the gap to 30 fps in 3D at full quality. In mono
 the GPU would be ~half (~33-37 ms) = 2D full quality near 30 fps. The
 paths to 30 fps stay: 2D full quality, the cuts env for 3D, or new GPU
 work (per-eye vertex reduction).
+
+## S3D_STEREO_AUTO: the slider switches the quality profile (2026-11-01)
+
+The user's daily-play ask: full quality in 2D, and the cuts automatically
+when the 3D slider goes up (stereo doubles the vertex load; full quality
+cannot carry it). port/stereo_auto_3ds.c: stereo_auto_init snapshots the
+boot values of the profile keys after env.txt/settings.txt load;
+stereo_auto_frame (vi loop, game thread, every frame) applies the
+cut-effects profile on the slider-up transition and restores the snapshot
+on slider-down. The profile = the 30 fps chase config (OBJ_DIST 30,
+OBJ_MINPX 45, plants/shadows/fur/grass/blur off, water tess + ripple
+off). Touch-menu row "3D: auto cut effects" (default on). Live switch:
+every key is re-read per frame, and cfg_gen bumps invalidate the water
+tess cache entries cleanly.
