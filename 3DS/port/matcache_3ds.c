@@ -20,6 +20,12 @@
 #include "profiler.h"
 #include "matcache_3ds.h"
 
+// The material hash of the CURRENT shadow state (the sampled words over
+// the mask regions): a hit whose stored material equals the applied one
+// skips the restore (the state is already correct - the common case when
+// the consecutive draws share the material)
+u32 matcache_shadow_hash(void);
+
 static u32 light_hash(void) {
     // Sampled words of the light objects (the per-frame content)
     const u8* p = (const u8*)g_gx.lights;
@@ -47,6 +53,7 @@ typedef struct {
     u32 idx;
     u32 advance;
     u32 lh;
+    u32 mat_hash;
     int rcp[7];
     GxState state;
     u32 last_used;
@@ -106,7 +113,12 @@ u32 port_mat_setup(void* obj, void* m, void* am, u32 bs_pos, const void* bs_data
         if (e->used && e->obj == obj && e->m == m && e->am == am && e->bs_pos == bs_pos && e->bs_hash == key_hash &&
             e->anim == anim && e->lights == lights && e->lh == lh) {
             e->last_used = prof_frame_count();
-            gxrec_delta_restore(&e->state);
+            // The material is usually still the applied one (the consecutive
+            // draws of the same object): the hash check skips the restore
+            if (e->mat_hash != matcache_shadow_hash()) {
+                gxrec_delta_restore(&e->state);
+                PROF_COUNT("mat.restores", 1);
+            }
             rcp_load(e);
             s_last_advance = e->advance;
             PROF_COUNT("mat.hits", 1);
@@ -136,6 +148,7 @@ u32 port_mat_end(void* obj, void* m, void* am, u32 bs_pos, const void* bs_data, 
     slot->idx = idx;
     slot->advance = advance;
     slot->lh = lh;
+    slot->mat_hash = matcache_shadow_hash();
     slot->last_used = prof_frame_count();
     rcp_save(slot);
     gxrec_delta_snapshot(&slot->state);

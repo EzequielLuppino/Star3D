@@ -397,6 +397,25 @@ const u32* gxrec_delta_take(u32* mwords, u32* dwords) {
 }
 
 // The consumer side: apply one recorded delta packet
+u32 matcache_shadow_hash(void) {
+    u32 h = 0x811C9DC5u;
+    u32 n = 0;
+    for (int i = 0; i < RD_COUNT; i++) {
+        if (!(s_mat_mask & (1ull << i))) continue;
+        u32 size = s_region_table[i].size;
+        if (i == RD_PIXEL) size = (u32)offsetof(GxPixelState, fog_type);
+        const u8* p = (const u8*)&s_shadow + s_region_table[i].off;
+        for (u32 o = 0; o < size; o += 23) {
+            u32 w;
+            memcpy(&w, p + o, 4);
+            h = (h ^ w) * 0x01000193u;
+            n++;
+        }
+    }
+    (void)n;
+    return h;
+}
+
 void gxrec_delta_apply(const u32* p, u32 words) {
     (void)words;
     u64 bm = p[0] | ((u64)p[1] << 32);
