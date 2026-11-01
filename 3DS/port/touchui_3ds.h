@@ -3,6 +3,7 @@
 
 // Bottom screen touch menu (settings, minimap, cheats), see touchui_3ds.c
 void touchui_load_settings(void);
+void touchui_save_settings(void);  // Write the rows' current values to settings.txt
 void touchui_input(void);
 void touchui_frame(void);
 void touchui_draw(void);

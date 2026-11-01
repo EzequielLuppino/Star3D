@@ -358,9 +358,11 @@ void port_os_init(void) {
 void* port_mem1_base(void) { return sMem1; }
 
 void probe_shutdown(void);  // probe_3ds.c
+void stereo_auto_shutdown(void);  // stereo_auto_3ds.c
 
 void port_shutdown_and_exit(int code) {
     LOG_INFO("os", "shutting down (code %d)", code);
+    stereo_auto_shutdown();  // Restore + save the boot quality settings
     netsrv_shutdown();  // socExit: release the listener for the next boot
     watchdog_stop();
     probe_shutdown();  // S3D_PROBE sampler thread (probe_3ds.c)

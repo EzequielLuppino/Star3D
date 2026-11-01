@@ -12,6 +12,7 @@
 #include <3ds.h>
 #include "config.h"
 #include "log.h"
+#include "touchui_3ds.h"
 
 typedef struct {
     const char* key;
@@ -61,5 +62,21 @@ void stereo_auto_frame(float slider) {
     } else {
         LOG_WARN("stereo", "3D off: restoring the boot quality settings");
         for (u32 i = 0; i < PROFILE_COUNT; i++) cfg_set(s_profile[i].key, s_boot[i]);
+        // Write the restored values back to settings.txt: a touch-menu save
+        // while the cut profile was active persisted the cuts, and the next
+        // boot's snapshot would then restore the cuts (fur/shadows stayed
+        // off in 2D until the file was fixed)
+        touchui_save_settings();
     }
+}
+
+// Called from port_shutdown_and_exit: never let a session end with the cut
+// values in settings.txt (quit while the 3D profile is active). The restore
+// cfg_sets are no-ops when the boot values already hold.
+void stereo_auto_shutdown(void) {
+    static int on = -1;
+    CFG_LIVE(on, cfg_int("S3D_STEREO_AUTO", 1));
+    if (!on) return;
+    for (u32 i = 0; i < PROFILE_COUNT; i++) cfg_set(s_profile[i].key, s_boot[i]);
+    touchui_save_settings();
 }

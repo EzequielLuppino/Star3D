@@ -319,6 +319,11 @@ static void save_settings(void) {
     fclose(f);
 }
 
+// The stereo-auto profile (stereo_auto_3ds.c) writes the restored values back
+// to settings.txt: a menu save while the cut profile was active would
+// otherwise persist the cut values (the profile's cfg_sets are live-only)
+void touchui_save_settings(void) { save_settings(); }
+
 static bool is_advanced_key(const char* key) {
     for (int i = 0; i < COUNT(settings_rows); i++)
         if (settings_rows[i].key && !strcmp(settings_rows[i].key, key)) return settings_rows[i].advanced;

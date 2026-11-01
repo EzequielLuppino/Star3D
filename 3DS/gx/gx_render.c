@@ -1595,8 +1595,12 @@ static bool water_tessellate(bool packed, const void* owner, const void** verts,
     int n = water_tess_level(tris, want);
     u32 vper = (u32)((n + 1) * (n + 2) / 2), tper = (u32)(n * n);
     u32 vsize = packed ? sizeof(GxPackedVertex) : sizeof(GxOutVertex);
-    // Fallback waves: four grid steps per wave, never shorter than S3D_WATER_WAVE_MIN
-    float len = 4.0f * max_len / n, min_len = s_wt_wave > 0 ? (float)s_wt_wave : 20.0f;
+    // Fallback waves: four grid steps per wave, never shorter than S3D_WATER_WAVE_MIN.
+    // An unsubdivided grid (n == 1, S3D_WATER_TESS=1) uses the fallback length
+    // exactly: 4 * max_len would stretch the waves across the mesh's huge
+    // triangles (the 3D cut profile's water came out wrong)
+    float min_len = s_wt_wave > 0 ? (float)s_wt_wave : 20.0f;
+    float len = n == 1 ? min_len : 4.0f * max_len / n;
     WaterOfs wo;
     water_ofs_setup(&wo, len > min_len ? len : min_len);
     // The caustic has 4 waves per UV unit along v: grid steps longer than
