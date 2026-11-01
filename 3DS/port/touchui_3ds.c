@@ -137,6 +137,10 @@ static const Row settings_rows[] = {
     // 3D slider is up. S3D_STEREO_AUTOCONV: the screen depth follows Fox
     { "3D: faster (fewer effects)", ROW_BOOL, "S3D_STEREO_REDUCED", 0 },
     { "3D: depth follows Fox", ROW_BOOL, "S3D_STEREO_AUTOCONV", 1 },
+    // S3D_STEREO_AUTO: the slider also switches the whole quality profile -
+    // the cut-effects config with the slider up, the boot settings with it
+    // down (port/stereo_auto_3ds.c)
+    { "3D: auto cut effects", ROW_BOOL, "S3D_STEREO_AUTO", 1 },
     { "Gyro aiming", ROW_BOOL, "S3D_GYRO_AIM", 1 },
     { "C-stick moves camera", ROW_BOOL, "S3D_CSTICK_CAMERA", 1 },
     { "Texture blur (LOD bias)", ROW_CHOICE, "S3D_TEX_LODBIAS_X4", 0, lod_choices, lod_names, .advanced = true },

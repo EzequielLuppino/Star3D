@@ -19,6 +19,7 @@
 #include "profiler.h"
 #include "perf/draw_src.h"
 #include "touchui_3ds.h"
+#include "stereo_auto_3ds.h"
 #include "watchdog.h"
 
 typedef void (*VIRetraceCallback)(u32 retraceCount);
@@ -177,6 +178,9 @@ void VIWaitForRetrace(void) {
     ft_frame();
 
     prof_frame_begin();
+    // The 3D slider also switches the quality profile (S3D_STEREO_AUTO):
+    // cuts with the slider up, the boot settings with it down
+    stereo_auto_frame(gx_frame_slider());
     if (overlap) {
         WD_PHASE("vi: gxrec_record_frame");
         gxrec_record_frame(sBlack, sGxReset, gx_frame_slider());

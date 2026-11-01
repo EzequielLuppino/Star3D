@@ -18,6 +18,7 @@
 #include "port_3ds.h"
 #include "sysinfo.h"
 #include "touchui_3ds.h"
+#include "stereo_auto_3ds.h"
 #include "watchdog.h"
 #include "worker.h"
 
@@ -175,6 +176,7 @@ int main(void) {
 
     load_env_file();
     touchui_load_settings();  // After env.txt, which wins
+    stereo_auto_init();  // Snapshot the boot quality profile (S3D_STEREO_AUTO)
     netsrv_init();
     setup_screen_style();
     if (!cfg_bool("S3D_BOTTOM_HUD", true)) {
