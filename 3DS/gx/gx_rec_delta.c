@@ -105,9 +105,7 @@ typedef struct {
 // clears are per-object or per-frame state and stay on their own paths (the
 // render side loads some of them from the display lists - restoring them
 // from the cache would overwrite those).
-static const u64 s_mat_mask = (1ull << RD_NUM_TEXGENS) | (1ull << RD_NUM_CHANS) | (1ull << RD_CHAN) |
-                              (1ull << RD_CHAN_MAT) | (1ull << RD_CHAN_AMB) | (1ull << RD_PIXEL) |
-                              (1ull << RD_TEX_OFFSET_EN) |
+static const u64 s_mat_mask = (1ull << RD_NUM_TEXGENS) | (1ull << RD_PIXEL) | (1ull << RD_TEX_OFFSET_EN) |
                               (1ull << RD_TEXCOPY) | (1ull << RD_TEV_STAGES) | (1ull << RD_TEV_REGS) |
                               (1ull << RD_TEV_KCOLORS) | (1ull << RD_TEV_SWAP) | (1ull << RD_TEV_NUM) |
                               (1ull << RD_TEV_WARP) | (1ull << RD_TEV_IND) | (1ull << RD_TEV_IND_MAP) |
