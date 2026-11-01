@@ -4417,3 +4417,33 @@ config is assembled from the numbers instead of blanket cuts. Free/cheap
 wins in the queue: bug 41's cull fix (correct back-face culling = GPU
 saving), S3D_STEREO_REDUCED (half fur/grass layers + no blur in the right
 eye only), a lower S3D_WATER_TESS.
+
+## Render-thread probe: where the translation CPU goes (2026-11-01)
+
+S3D_PROBE=3 at the hub (pond in view, full quality + S3D_VSH_LEAN=3 +
+S3D_TEX_RES=1): 73 ms/frame sampled. The sampler's render-thread phase
+histogram and the game-thread recorder detail:
+- Render thread: gx.dl.segment 22.5 ms, c3d.uniforms 5.3, gx.displaylist
+  3.6, gx.draw 3.5, gx.gather16 3.3, (state delta) 2.7, gx.dl.lookup 2.4,
+  gx.immediate 2.4, gx.tev.apply 1.9 ... (the "segment" zone wraps the
+  cached-draw submission itself, not decode)
+- drawc: 33.7 ms/frame across 653 cached draws - flush 0.24, prepare 0.36,
+  layout 0.34, **water 20.4**, vsrc 0.22, draw 12.8. wtphase: scan 0.32,
+  alloc 0.01, **vert 19.2** (the per-frame grid generation), idx 0.06.
+- Game thread recorder: wrapper/encode 14.7 ms + dedup filter 4.4 ms a
+  frame (~3400 recorded ops: 1299 state deltas, 800 GXSetTexCoordGen2,
+  657 DL calls, 637 matrix blocks).
+- Game scopes: objRender 15.6 + mapBlock 10.3 + objRender.transp 4.9 +
+  logic 6.0 + scene 3.6 ... (the game thread's own code dominates at this
+  spot; the recorder tax is ~19 ms of it).
+
+Conclusions that shaped the work:
+1. The water tessellation regenerated its grids every frame although the
+   grid is a pure function of the draw's static buffers, the level and
+   the settings (waves animate in the vsh, the caustic table is static).
+   Now cached (gx_render.c WT_CACHE_*, see the commit) - ~20 ms/frame
+   reclaimed on the render thread at the pond.
+2. The game-thread recorder (~19 ms) and the per-draw submission (~13 ms)
+   are the next two translation-layer costs; the recorder's state-delta
+   and matrix-block ops (~11 ms) are the same targets the DL batch and
+   RT dedup were built for.
