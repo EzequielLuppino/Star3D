@@ -99,8 +99,25 @@ typedef struct {
 #define RDREG(field) { (u16)offsetof(GxState, field), (u16)sizeof(((GxState*)0)->field) }
 #define RDREGS(field, size) { (u16)offsetof(GxState, field), (u16)(size) }
 
-static const DeltaRegion s_region_table[RD_COUNT] = {
-    [RD_VTX_DESC] = RDREG(vtx_desc),
+// The material regions for the material cache (RENDERER_CHANNEL.md): the
+// TEV/texture/texgen/light/channel/pixel state the setup builds. The
+// vertex descriptors, formats, arrays, projections, viewport, scissor and
+// clears are per-object or per-frame state and stay on their own paths (the
+// render side loads some of them from the display lists - restoring them
+// from the cache would overwrite those).
+static const u64 s_mat_mask = (1ull << RD_NUM_TEXGENS) | (1ull << RD_NUM_CHANS) | (1ull << RD_CHAN) |
+                              (1ull << RD_CHAN_MAT) | (1ull << RD_CHAN_AMB) | (1ull << RD_PIXEL) |
+                              (1ull << RD_LINE_POINT) | (1ull << RD_TEX_OFFSET_EN) | (1ull << RD_TEXCOPY) |
+                              (1ull << RD_TEV_STAGES) | (1ull << RD_TEV_REGS) | (1ull << RD_TEV_KCOLORS) |
+                              (1ull << RD_TEV_SWAP) | (1ull << RD_TEV_NUM) | (1ull << RD_TEV_WARP) |
+                              (1ull << RD_TEV_IND) | (1ull << RD_TEV_IND_MAP) | (1ull << RD_TEV_RIPPLE) |
+                              (1ull << RD_TEV_NUM_IND) | (1ull << RD_LIGHT0) | (1ull << RD_LIGHT1) |
+                              (1ull << RD_LIGHT2) | (1ull << RD_LIGHT3) | (1ull << RD_LIGHT4) |
+                              (1ull << RD_LIGHT5) | (1ull << RD_LIGHT6) | (1ull << RD_LIGHT7) |
+                              (1ull << RD_TEX0) | (1ull << RD_TEX1) | (1ull << RD_TEX2) | (1ull << RD_TEX3) |
+                              (1ull << RD_TEX4) | (1ull << RD_TEX5) | (1ull << RD_TEX6) | (1ull << RD_TEX7);
+
+static const DeltaRegion s_region_table[RD_COUNT] = {    [RD_VTX_DESC] = RDREG(vtx_desc),
     [RD_VTX_FMT] = RDREG(vtx_fmt),
     [RD_ARRAY0] = RDREGS(arrays[0], 8 * sizeof(((GxState*)0)->arrays[0])),
     [RD_ARRAY1] = RDREGS(arrays[8], 8 * sizeof(((GxState*)0)->arrays[0])),
@@ -317,6 +334,7 @@ void gxrec_delta_flush(void) {
 // (the MBLOCK carries them), so the stored material never touches them.
 void gxrec_delta_snapshot(GxState* out) {
     for (int i = 0; i < RD_COUNT; i++) {
+        if (!(s_mat_mask & (1ull << i))) continue;
         u32 size = s_region_table[i].size;
         // The fog fields (the tail of the pixel state) are per-frame - the
         // material snapshot must not capture them
@@ -327,6 +345,7 @@ void gxrec_delta_snapshot(GxState* out) {
 
 void gxrec_delta_restore(const GxState* in) {
     for (int i = 0; i < RD_COUNT; i++) {
+        if (!(s_mat_mask & (1ull << i))) continue;
         u32 size = s_region_table[i].size;
         // The fog stays per-frame: the restore skips the pixel state's fog
         // fields (they are the tail of the region)
@@ -334,7 +353,7 @@ void gxrec_delta_restore(const GxState* in) {
         memcpy((u8*)&s_shadow + s_region_table[i].off, (const u8*)in + s_region_table[i].off, size);
         memcpy((u8*)&g_gx + s_region_table[i].off, (const u8*)in + s_region_table[i].off, size);
     }
-    s_regions = (1ull << RD_COUNT) - 1;  // The next flush ships everything
+    s_regions |= s_mat_mask;  // The next flush ships the material regions
     s_dirty = 0xFFFFFFFFu;
 }
 
