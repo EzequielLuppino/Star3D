@@ -36,10 +36,11 @@ typedef struct {
     u32 advance;
     int rcp[7];
     GxState state;
+    u32 last_used;
     u8 used;
 } MatEntry;
 
-static MatEntry s_entries[64];
+static MatEntry s_entries[256];
 static u32 s_last_advance;
 
 static u32 bs_hash(const void* data, u32 pos) {
@@ -86,11 +87,12 @@ u32 port_mat_setup(void* obj, void* m, void* am, u32 bs_pos, const void* bs_data
     CFG_LIVE(on, cfg_int("S3D_MAT_CACHE", 0));
     if (!on) return 0xFFFFFFFFu;
     u32 key_hash = bs_hash(bs_data, bs_pos);
-    for (int i = 0; i < 64; i++) {
+    for (int i = 0; i < 256; i++) {
         MatEntry* e = &s_entries[i];
         if (!e->used) continue;
         if (e->obj == obj && e->m == m && e->am == am && e->bs_pos == bs_pos && e->bs_hash == key_hash &&
             e->anim == anim && e->lights == lights) {
+            e->last_used = prof_frame_count();
             gxrec_delta_restore(&e->state);
             rcp_load(e);
             s_last_advance = e->advance;
@@ -103,7 +105,7 @@ u32 port_mat_setup(void* obj, void* m, void* am, u32 bs_pos, const void* bs_data
     // fixable inputs; a differing hash = the instructions themselves moved)
     {
         bool same_bs = false, diff_anim = false, diff_lights = false;
-        for (int i = 0; i < 64; i++) {
+        for (int i = 0; i < 256; i++) {
             MatEntry* e = &s_entries[i];
             if (!e->used) continue;
             if (e->obj == obj && e->m == m && e->am == am && e->bs_pos == bs_pos) {
@@ -134,13 +136,17 @@ u32 port_mat_end(void* obj, void* m, void* am, u32 bs_pos, const void* bs_data, 
                  u32 idx, u32 advance) {
     u32 key_hash = bs_hash(bs_data, bs_pos);
     MatEntry* slot = NULL;
-    for (int i = 0; i < 64; i++) {
+    u32 oldest = 0xFFFFFFFFu;
+    for (int i = 0; i < 256; i++) {
         if (!s_entries[i].used) {
             slot = &s_entries[i];
             break;
         }
+        if (s_entries[i].last_used < oldest) {
+            oldest = s_entries[i].last_used;
+            slot = &s_entries[i];
+        }
     }
-    if (!slot) slot = &s_entries[0];  // All full: reuse the first (misses only)
     slot->used = 1;
     slot->obj = obj;
     slot->m = m;
@@ -151,6 +157,7 @@ u32 port_mat_end(void* obj, void* m, void* am, u32 bs_pos, const void* bs_data, 
     slot->lights = lights;
     slot->idx = idx;
     slot->advance = advance;
+    slot->last_used = prof_frame_count();
     rcp_save(slot);
     gxrec_delta_snapshot(&slot->state);
     return idx;
