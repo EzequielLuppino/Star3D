@@ -99,3 +99,18 @@ exactly as it does today.
 - Next: the vertex emission (the emitters assemble GxOutVertex + indices so
   the recorded-DL decode retires), then the material cache for the
   render-side state bake.
+
+## Stage C attempt 1 reverted: the game-side state misses the DL-loaded formats
+
+The first emission attempt decoded the immediate streams on the game
+thread - it broke with vertex explosions (NaN positions). The cause: the
+game's own GX state does not include the vertex formats that DISPLAY
+LISTS load (the CP-format commands inside the DLs apply only on the
+render side during the replay), so the game thread decoded with stale
+formats. Reverted (3668ae2 / b968495).
+
+The redesign path: the DL-record capture (gx_rec.c s_dl) sees the DL's
+CP commands while the game records them - executing those format loads
+against the game-side state at record time would make the game-side
+state complete, and the emission then decodes with the right formats.
+That is the next attempt; the seam + collapse + trust stack stays.
