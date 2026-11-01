@@ -26,18 +26,6 @@
 // the consecutive draws share the material)
 u32 matcache_shadow_hash(void);
 
-static u32 light_hash(void) {
-    // Sampled words of the light objects (the per-frame content)
-    const u8* p = (const u8*)g_gx.lights;
-    u32 h = 0x811C9DC5u;
-    for (int i = 0; i < 16; i++) {
-        u32 w;
-        memcpy(&w, p + (i * 31), 4);
-        h = (h ^ w) * 0x01000193u;
-    }
-    return h;
-}
-
 // The game's stage counters (shader_dolphin.c)
 extern int gRcpNumTevStages, gRcpNumTexGens, gRcpNumIndStages;
 extern int gRcpNextTevStage, gRcpNextTexCoord, gRcpNextTexMap, gRcpNextPostTexMtx;
@@ -52,7 +40,6 @@ typedef struct {
     int lights;
     u32 idx;
     u32 advance;
-    u32 lh;
     u32 mat_hash;
     int rcp[7];
     GxState state;
@@ -107,12 +94,12 @@ u32 port_mat_setup(void* obj, void* m, void* am, u32 bs_pos, const void* bs_data
     CFG_LIVE(on, cfg_int("S3D_MAT_CACHE", 0));
     if (!on || !g_map_loaded) return 0xFFFFFFFFu;  // The title/attract scenes stay uncached
     u32 key_hash = bs_hash(bs_data, bs_pos);
-    u32 lh = light_hash();
-    u32 pair = ((uintptr_t)obj >> 4) & 127;
+    uintptr_t o = (uintptr_t)obj;
+    u32 pair = ((o >> 4) ^ (o >> 12) ^ (o >> 20)) & 127;
     for (int w = 0; w < 2; w++) {
         MatEntry* e = &s_entries[pair * 2 + w];
         if (e->used && e->obj == obj && e->m == m && e->am == am && e->bs_pos == bs_pos && e->bs_hash == key_hash &&
-            e->anim == anim && e->lights == lights && e->lh == lh) {
+            e->anim == anim && e->lights == lights) {
             e->last_used = prof_frame_count();
             // The material is usually still the applied one (the consecutive
             // draws of the same object): the hash check skips the restore
@@ -136,8 +123,8 @@ u32 port_mat_setup(void* obj, void* m, void* am, u32 bs_pos, const void* bs_data
 u32 port_mat_end(void* obj, void* m, void* am, u32 bs_pos, const void* bs_data, void* anim, int lights,
                  u32 idx, u32 advance) {
     u32 key_hash = bs_hash(bs_data, bs_pos);
-    u32 lh = light_hash();
-    u32 pair = ((uintptr_t)obj >> 4) & 127;
+    uintptr_t o = (uintptr_t)obj;
+    u32 pair = ((o >> 4) ^ (o >> 12) ^ (o >> 20)) & 127;
     MatEntry* slot = &s_entries[pair * 2];
     if (slot->used && s_entries[pair * 2 + 1].used == 0) slot = &s_entries[pair * 2 + 1];
     else if (slot->used && s_entries[pair * 2 + 1].used &&
@@ -153,7 +140,6 @@ u32 port_mat_end(void* obj, void* m, void* am, u32 bs_pos, const void* bs_data, 
     slot->lights = lights;
     slot->idx = idx;
     slot->advance = advance;
-    slot->lh = lh;
     slot->mat_hash = matcache_shadow_hash();
     slot->last_used = prof_frame_count();
     rcp_save(slot);
