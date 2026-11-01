@@ -61,6 +61,9 @@ static const char* const fur_names[] = { "Off", "Cutscene", "Always" };
 static const int anim_lod_choices[] = { 1, 2, 0, INT32_MIN };
 static const char* const anim_lod_names[] = { "Off", "On", "Strong" };
 static const int lod_choices[] = { 0, 2, 4, -2, INT32_MIN };
+// S3D_TEX_RES: the mip level every texture binds at (gx_render.c bind_unit)
+static const int tex_res_choices[] = { 0, 1, 2, 3, INT32_MIN };
+static const char* const tex_res_names[] = { "Full", "Half", "Quarter", "Eighth" };
 // S3D_RENDER_THREAD (gx/gx_rec.h): 1 records and replays on the game thread
 static const int rt_choices[] = { 2, 0, 1, INT32_MIN };
 static const char* const rt_names[] = { "Off", "Test (1 core)", "Core 2" };
@@ -137,6 +140,7 @@ static const Row settings_rows[] = {
     { "Gyro aiming", ROW_BOOL, "S3D_GYRO_AIM", 1 },
     { "C-stick moves camera", ROW_BOOL, "S3D_CSTICK_CAMERA", 1 },
     { "Texture blur (LOD bias)", ROW_CHOICE, "S3D_TEX_LODBIAS_X4", 0, lod_choices, lod_names, .advanced = true },
+    { "Texture resolution", ROW_CHOICE, "S3D_TEX_RES", 0, tex_res_choices, tex_res_names },
     { "Lean shaders", ROW_CHOICE, "S3D_VSH_LEAN", 1, lean_choices, lean_names, .advanced = true },
     { "Debug: mip level", ROW_CHOICE, "S3D_DBG_MIP", 0, mip_choices, mip_names, .advanced = true },
     { "Logging", ROW_LOG },

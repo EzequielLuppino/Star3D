@@ -124,6 +124,7 @@ static int s_light_count;  // Lights the vertex shader evaluates (0 when lightin
 // fast path (bool tcaff) and whether the slot is sampled; unused slots 1 and
 // 2 are skipped (marker texsrc.y = 2). 0 = every slot on the general path
 static int s_vsh_lean = 1;         // S3D_VSH_LEAN: bit 0 affine path, bit 1 skip unused slots 1 and 2
+static int s_tex_res;              // S3D_TEX_RES: mip level every texture binds at (0 = full)
 static bool s_tc_used[GX_PICA_TEX_UNITS];
 // Path of each slot: affine from the texcoord, the position or the normal,
 // or general because of a projective q row, a warp or S3D_VSH_LEAN=0
@@ -231,6 +232,7 @@ void gx_render_init(void) {
     s_fog_frag = cfg_bool("S3D_FOG_FRAG", true);
     s_frag_light = cfg_bool("S3D_FRAG_LIGHT", true);
     s_vsh_lean = cfg_int("S3D_VSH_LEAN", 1);
+    s_tex_res = cfg_int("S3D_TEX_RES", 0);
     s_dbg_idcolor = cfg_bool("S3D_DBG_IDCOLOR", false);
     s_dbg_hold = s_dbg_idcolor || cfg_bool("S3D_DBG_HOLD", false);
     s_dbg_texdump = cfg_int("S3D_DBG_TEXDUMP", -1);
@@ -697,6 +699,12 @@ static void bind_unit(int u, C3D_Tex* t, int eye) {
         v->param = (v->param & ~GPU_TEXTURE_MODE(7)) | GPU_TEXTURE_MODE(GPU_TEX_PROJECTION);
         t = v;
     }
+    // S3D_TEX_RES: sample every texture from a clamped mip level (1 = half
+    // resolution, 2 = quarter, ...). The mip chain stays, so the game's own
+    // LOD picks levels within the clamped range. Off (0) resets the level:
+    // the setting is live, and a previous clamp must not stick to the
+    // cached texture entries.
+    if (t) t->minLevel = s_tex_res > 0 && (u32)s_tex_res <= t->maxLevel ? (u32)s_tex_res : 0;
     C3D_TexBind(u, t);
 }
 
@@ -958,6 +966,7 @@ void gx_render_frame_begin(void) {
             s_fog_on = cfg_bool("S3D_FOG", true);
             s_frag_light = cfg_bool("S3D_FRAG_LIGHT", true);
             s_vsh_lean = cfg_int("S3D_VSH_LEAN", 1);
+            s_tex_res = cfg_int("S3D_TEX_RES", 0);
             s_eye_autoconv = cfg_bool("S3D_STEREO_AUTOCONV", true);
             s_eye_reduced = cfg_bool("S3D_STEREO_REDUCED", false);
             s_tex_lod_bias = cfg_int("S3D_TEX_LODBIAS_X4", 0) / 4.0f;
