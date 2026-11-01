@@ -84,7 +84,17 @@ void netsrv_shutdown(void) {
     s_on = false;
     s_quit = true;
     if (s_listen_fd >= 0) close(s_listen_fd);  // Wake the accept loop
-    if (s_thread) threadJoin(s_thread, U64_MAX);
+    if (s_thread) {
+        // Bounded like gxrec_shutdown: the server thread's I/O checks s_quit
+        // and its selects time out in 1 s, so it must exit within this bound
+        // unless it is stuck in an uninterruptible FS op. A hung server must
+        // not keep the game from exiting - the old unbounded join did exactly
+        // that: the watchdog kept reporting after "shutting down" while the
+        // main thread waited forever for the server thread.
+        bool joined = threadJoin(s_thread, 2000000000ULL) == 0;
+        if (!joined) LOG_WARN("netsrv", "server thread did not exit in 2 s, continuing shutdown");
+        threadFree(s_thread);
+    }
     s_thread = NULL;
     socExit();
 }
@@ -117,10 +127,11 @@ static char* find_header(char* s, const char* name) {
 // SO_SNDTIMEO and no fcntl O_NONBLOCK, so readiness comes from select().
 static int recv_to(int fd, void* buf, size_t n) {
     for (;;) {
+        if (s_quit) return -1;
         fd_set rfds;
         FD_ZERO(&rfds);
         FD_SET(fd, &rfds);
-        struct timeval tv = { 10, 0 };
+        struct timeval tv = { 1, 0 };  // 1 s: re-check s_quit promptly
         int r = select(fd + 1, &rfds, NULL, NULL, &tv);
         if (r <= 0) return -1;  // Timeout or error
         ssize_t got = recv(fd, buf, n, 0);
@@ -133,10 +144,11 @@ static int recv_to(int fd, void* buf, size_t n) {
 static int send_to(int fd, const void* buf, size_t n) {
     size_t off = 0;
     while (off < n) {
+        if (s_quit) return -1;
         fd_set wfds;
         FD_ZERO(&wfds);
         FD_SET(fd, &wfds);
-        struct timeval tv = { 10, 0 };
+        struct timeval tv = { 1, 0 };  // 1 s: re-check s_quit promptly
         int r = select(fd + 1, NULL, &wfds, NULL, &tv);
         if (r <= 0) return -1;
         // Keep each send small so a blocking socket can't stall on a full
@@ -464,7 +476,12 @@ static void server_main(void* arg) {
             if (attempt < 4 || attempt % 20 == 0)
                 LOG_WARN("netsrv", "bind(:%d) failed: %d (attempt %d, retrying)", s_port, errno, attempt + 1);
             attempt++;
-            svcSleepThread(3 * 1000 * 1000 * 1000);
+            svcSleepThread(3LL * 1000 * 1000 * 1000);  // 3 s (LL: the int product overflows)
+            if (s_quit) {
+                trace("server: quit during bind retries");
+                close(fd);
+                return;
+            }
             if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) == 0) break;
         }
         trace("server: bind succeeded after %d retries", attempt);
@@ -481,6 +498,16 @@ static void server_main(void* arg) {
     trace("server: listening on %d", s_port);
     for (;;) {
         if (s_quit) break;
+        // Select-based accept: the 3DS soc service does not reliably wake a
+        // blocked accept() when the listen fd is closed, and a stuck accept
+        // would make netsrv_shutdown's join time out. The 1 s timeout
+        // re-checks s_quit promptly.
+        fd_set rfds;
+        FD_ZERO(&rfds);
+        FD_SET(fd, &rfds);
+        struct timeval tv = { 1, 0 };
+        int r = select(fd + 1, &rfds, NULL, NULL, &tv);
+        if (r <= 0) continue;
         struct sockaddr_in cli;
         socklen_t cl = sizeof(cli);
         int c = accept(fd, (struct sockaddr*)&cli, &cl);
@@ -491,6 +518,7 @@ static void server_main(void* arg) {
         handle(c);
         close(c);
     }
+    trace("server: thread exiting");
     // The listen fd was closed by netsrv_shutdown to wake this accept
 }
 
