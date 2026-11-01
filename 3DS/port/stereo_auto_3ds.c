@@ -32,7 +32,10 @@ static const ProfileKey s_profile[] = {
     { "S3D_FUR_MODE", 0, 1 },
     { "S3D_GRASS_BUDGET", 0, 8 },
     { "S3D_GPU_BLUR", 0, 1 },
-    { "S3D_WATER_TESS", 0, 16 },
+    // 1, not 0: TESS=0 skips the grid and with it the wave-mode vertex
+    // colours (the vsh then reads the mesh's own near-black colours and the
+    // water turns blue/dark); n=1 writes the colours without subdividing
+    { "S3D_WATER_TESS", 1, 16 },
     { "S3D_WATER_RIPPLE", 0, 1 },
 };
 #define PROFILE_COUNT (sizeof(s_profile) / sizeof(s_profile[0]))
