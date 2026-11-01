@@ -4396,3 +4396,24 @@ micro-drift). Open issues while roaming: the DL-cache entry free can crash
 missing geometry), and the render capture (L+R+SELECT mark) can crash the
 kernel (deterministic prefetch abort in the kernel, dumps 5/6) - see the
 capture bug entry.
+
+## Full-quality baseline: 15 fps at the hub (2026-11-01)
+
+With the cuts env removed (settings.txt re-enables shadows, fur, GPU blur,
+grass budget 8, FPS cap 30; the env only has the net server), the hub runs
+at 15 fps (~66 ms/frame). Prof zones (Star3D.log, the user's run):
+- rt.replay ~60 ms/frame - the render thread, GPU-bound (vs ~21 ms GPU at the
+  cuts config, a ~3x)
+- game.sceneRender ~35 ms/frame (parallel with the render thread, so not the
+  long pole alone)
+- rt.fence_wait ~19-21 ms - the render thread waiting on the GPU fence
+- gx.water_tess_tris 12254/frame over 5 draws (S3D_WATER_TESS=16, ripple on)
+- frame.touchui ~1.2 ms after the every-frame redraw fix (was 0.06 with the
+  skip; the blink fix's price, acceptable)
+The GPU is the long pole. Attribution plan: the setting A/B runs (diag_3ds.c,
+one test per boot, standing still at the hub) over the suspects - shadows,
+cull (bug 41's tax), object distance, plants, fur - then the daily play
+config is assembled from the numbers instead of blanket cuts. Free/cheap
+wins in the queue: bug 41's cull fix (correct back-face culling = GPU
+saving), S3D_STEREO_REDUCED (half fur/grass layers + no blur in the right
+eye only), a lower S3D_WATER_TESS.
