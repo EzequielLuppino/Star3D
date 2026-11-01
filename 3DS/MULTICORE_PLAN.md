@@ -4551,3 +4551,18 @@ At the user's busy hub spot (probe, ~58 ms frames):
   only ~10 batches a frame when the batchable models (flag 0x8000) exist,
   and the per-draw uniform/state-apply work. The hash move stays: it
   lightens the game thread (helps game-bound spots) at no net cost here.
+
+## DL batching: at its game-imposed limit (2026-11-01)
+
+Why S3D_DL_BATCH forms few batches: it already forms every batch the
+game offers. The dlbatch log at the busy spot: "batch ends per frame
+(50.3): (state delta) 43.9, gx_dl_call_hashed 3.9, (matrix block) 1.2" -
+each batch ends when the next object's state delta or a different list
+arrives, i.e. the ~50 model runs per frame the game produces. The
+adaptive hold logic works (dlb.not_held 26-60/frame for lists that keep
+ending up alone). Extending it needs the game itself to draw longer
+same-model runs or to stop re-setting state per instance - game-side
+changes, out of reach without source-level surgery. Conclusion: the
+batching lever is exhausted; the remaining render-thread work is the
+per-draw state/submission overhead (~750 draws x ~5-8 us of c3d uniforms
++ state apply + draw submission).
