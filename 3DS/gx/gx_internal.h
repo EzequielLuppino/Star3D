@@ -276,9 +276,10 @@ void gxrec_delta_apply(const u32* p, u32 words);
 // clears the pending state; returns the word counts. Single-threaded: the
 // buffer stays valid until the next take or flush.
 const u32* gxrec_delta_take(u32* mwords, u32* dwords);
-// The immediate-stream fallback (lines/points expand on the render side):
+// The immediate-emission fallback (lines/points expand on the render side):
 // a self-contained op with the primitive, format, count and raw bytes
 void gxrec_put_imm_expand(GXPrimitive prim, u8 fmt, u16 count, const void* data, u32 n);
+void gxrec_put_imm_draw(u16 vbase, u16 vcount, u16 ibase, u32 icount);
 void gxrec_delta_mblk_apply(const u32* p, u32 words);
 void gxrec_delta_refresh(void);
 void gxrec_delta_frame_begin(void);
@@ -493,6 +494,11 @@ void gx_render_draw_cached_dynamic(const GxOutVertex* verts, const GxDynVertex* 
 void gx_render_draw_cached_dynamic16(const GxOutVertex* verts, const GxDyn16Vertex* dyn, const u16* indices,
                                      u32 index_count, float pos_scale);
 void* gx_render_alloc_dynamic(u32 bytes);
+// The immediate-emission buffers (gx_render.c): the game thread's decode
+// allocates into its frame's pair, the IMMDRAW op draws the last allocation
+GxOutVertex* gx_render_alloc_imm_vertices(u32 count, u32 index_count, u16** indices_out, u16* base_out);
+void gx_render_imm_draw(u16 vbase, u16 vcount, u16 ibase, u32 icount);
+void gx_render_imm_last(u16* vbase, u16* vcount, u16* ibase, u32* icount);
 u32 gx_render_frame_number(void);
 bool gx_render_dumping(void);  // Capture ID pass / batch dump frame
 

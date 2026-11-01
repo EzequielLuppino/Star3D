@@ -72,6 +72,18 @@ static bool s_cur_nrm_pv;  // posscale.w: normal texgens per vertex (upload_texm
 static int s_loc_posscale;
 static void use_layout(int layout, float pos_scale, float tc_scale);
 static u32 s_vused, s_iused;
+// The immediate-emission buffers (RENDERER_CHANNEL.md stage C): the game
+// thread decodes the immediate streams into these (its own pair, parity by
+// the frame number, so the render thread's own frame-buffer appends never
+// race it); the recorded IMMDRAW op lets the render thread bind + draw them
+static GxOutVertex* s_immv[2];
+static u16* s_immi[2];
+static u32 s_immv_used[2], s_immi_used[2];
+static u32 s_immv_flushed[2], s_immi_flushed[2];
+static u32 s_imm_frame_last;  // The game-thread frame of the last reset
+static u16 s_imm_vbase, s_imm_ibase;  // Last allocation (imm_submit records them)
+static u16 s_imm_vcount;
+static u32 s_imm_icount;
 static u32 s_batch_vstart, s_batch_istart;
 static u32 s_vflushed, s_iflushed, s_dynflushed;  // Written back by gx_render_flush_new_writes
 
@@ -246,8 +258,10 @@ void gx_render_init(void) {
         s_vbufs[i] = linearAlloc(MAX_FRAME_VERTICES * sizeof(GxOutVertex));
         s_ibufs[i] = linearAlloc(MAX_FRAME_INDICES * sizeof(u16));
         s_dynbufs[i] = linearAlloc(FRAME_DYN_BYTES);
+        s_immv[i] = linearAlloc(MAX_FRAME_VERTICES * sizeof(GxOutVertex));
+        s_immi[i] = linearAlloc(MAX_FRAME_INDICES * sizeof(u16));
     }
-    if (!s_vbufs[0] || !s_ibufs[0] || !s_dynbufs[0]) {
+    if (!s_vbufs[0] || !s_ibufs[0] || !s_dynbufs[0] || !s_immv[0] || !s_immi[0]) {
         LOG_ERROR("gx", "failed to allocate frame vertex/index buffers");
     }
     s_buffers_doubled = s_vbufs[1] && s_ibufs[1] && s_dynbufs[1];
@@ -257,6 +271,8 @@ void gx_render_init(void) {
         if (s_vbufs[1]) linearFree(s_vbufs[1]);
         if (s_ibufs[1]) linearFree(s_ibufs[1]);
         if (s_dynbufs[1]) linearFree(s_dynbufs[1]);
+        if (s_immv[1]) linearFree(s_immv[1]);
+        if (s_immi[1]) linearFree(s_immi[1]);
         s_vbufs[1] = s_vbufs[0];
         s_ibufs[1] = s_ibufs[0];
         s_dynbufs[1] = s_dynbufs[0];
@@ -2041,6 +2057,17 @@ void gx_render_flush_new_writes(void) {
         GSPGPU_FlushDataCache(s_wt_pool + s_wt_flushed, s_wt_pool_used - s_wt_flushed);
         s_wt_flushed = s_wt_pool_used;
     }
+    // The immediate-emission buffers (the game thread wrote the current
+    // frame's pair; the render thread draws it from the IMMDRAW op)
+    {
+        u32 p = s_frame_number & 1;
+        if (s_immv_used[p] > s_immv_flushed[p])
+            GSPGPU_FlushDataCache(s_immv[p], s_immv_used[p] * sizeof(GxOutVertex));
+        if (s_immi_used[p] > s_immi_flushed[p])
+            GSPGPU_FlushDataCache(s_immi[p], s_immi_used[p] * sizeof(u16));
+        s_immv_flushed[p] = s_immv_used[p];
+        s_immi_flushed[p] = s_immi_used[p];
+    }
     s_vflushed = s_vused;
     s_iflushed = s_iused;
     s_dynflushed = s_dynused;
@@ -2074,6 +2101,56 @@ GxOutVertex* gx_render_alloc_vertices(u32 count, u32 index_count, u16** indices_
     s_vused += count;
     s_iused += index_count;
     return v;
+}
+
+// The immediate-emission allocator (gx_vtx.c imm_submit, game thread only):
+// the frame's own pair, picked by the frame parity, with per-parity counters
+// reset on the first use of a new frame. The render thread draws the result
+// via gx_render_imm_draw() when the IMMDRAW op replays.
+GxOutVertex* gx_render_alloc_imm_vertices(u32 count, u32 index_count, u16** indices_out, u16* base_out) {
+    u32 frame = prof_frame_count();
+    u32 p = frame & 1;
+    if (s_imm_frame_last != frame) {
+        s_imm_frame_last = frame;
+        s_immv_used[p] = 0;
+        s_immi_used[p] = 0;
+    }
+    if (s_immv_used[p] + count > MAX_FRAME_VERTICES || s_immi_used[p] + index_count > MAX_FRAME_INDICES) {
+        LOG_ONCE(LOG_LEVEL_WARN, "gx", "imm emission buffer full, dropping draws");
+        PROF_COUNT("gx.dropped_imm_vertices", count);
+        s_imm_vcount = 0;  // The caller must not record a draw
+        return NULL;
+    }
+    GxOutVertex* v = &s_immv[p][s_immv_used[p]];
+    *base_out = (u16)s_immv_used[p];
+    *indices_out = &s_immi[p][s_immi_used[p]];
+    s_imm_vbase = *base_out;
+    s_imm_ibase = (u16)s_immi_used[p];
+    s_imm_vcount = (u16)count;
+    s_imm_icount = index_count;
+    s_immv_used[p] += count;
+    s_immi_used[p] += index_count;
+    return v;
+}
+
+// The IMMDRAW op's draw (gx_rec.c executor): bind and draw the emitted mesh
+// of the current frame's parity
+void gx_render_imm_draw(u16 vbase, u16 vcount, u16 ibase, u32 icount) {
+    (void)vcount;
+    gx_render_flush();  // Draw order with the pending batch
+    set_vsrc(VS_STD, &s_immv[s_frame_number & 1][vbase], NULL);
+    draw_triangles(icount, &s_immi[s_frame_number & 1][ibase]);
+    s_drawn = true;
+    PROF_COUNT("gx.imm_draws", 1);
+    PROF_COUNT("gx.triangles", icount / 3);
+}
+
+// The last emission allocation (gx_vtx.c imm_submit records it as IMMDRAW)
+void gx_render_imm_last(u16* vbase, u16* vcount, u16* ibase, u32* icount) {
+    *vbase = s_imm_vbase;
+    *vcount = s_imm_vcount;
+    *ibase = s_imm_ibase;
+    *icount = s_imm_icount;
 }
 
 // --- State translation -----------------------------------------------------------

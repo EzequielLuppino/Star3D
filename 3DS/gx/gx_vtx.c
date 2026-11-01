@@ -244,6 +244,10 @@ static void imm_submit(void) {
         s_game_decode = true;
         gx_vtx_draw_stream(s_imm_prim, s_imm_fmt, s_imm_count, s_imm_buf, s_imm_len, NULL);
         s_game_decode = false;
+        u16 vbase, vcount, ibase;
+        u32 icount;
+        gx_render_imm_last(&vbase, &vcount, &ibase, &icount);
+        if (vcount) gxrec_put_imm_draw(vbase, vcount, ibase, icount);
         return;
     }
     gx_vtx_draw_stream(s_imm_prim, s_imm_fmt, s_imm_count, s_imm_buf, s_imm_len, NULL);
@@ -587,6 +591,8 @@ void gx_vtx_draw_stream(GXPrimitive prim, u8 vtxfmt, u16 count, const u8* data, 
         out = s_lp_verts;
         indices = NULL;
         base = 0;
+    } else if (s_game_decode) {
+        out = gx_render_alloc_imm_vertices(count, nidx, &indices, &base);
     } else {
         out = gx_render_alloc_vertices(count, nidx, &indices, &base);
     }
