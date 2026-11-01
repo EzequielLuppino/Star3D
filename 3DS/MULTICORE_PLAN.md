@@ -4566,3 +4566,14 @@ changes, out of reach without source-level surgery. Conclusion: the
 batching lever is exhausted; the remaining render-thread work is the
 per-draw state/submission overhead (~750 draws x ~5-8 us of c3d uniforms
 + state apply + draw submission).
+
+## Hardware verification: the collapse + the hash move + the trust (2026-11-01)
+
+The user's replay route on the console (probe, build AC7D2521):
+- Recorder ops 13.5-15.7 -> ~4.1-4.8 ms (state delta 5.6-7.4 -> 1.7-2.3,
+  the DL hashing 6 -> 0.1-0.2, the collapsed model draw ~0.9)
+- gx.dl.lookup 4.9 -> 1.1 ms, gx.dl.validate gone (the trust)
+- Frame 58 -> ~50 ms at the route's heavy section (17 -> 20 fps); the
+  render thread idles ~25 ms/frame waiting for the game
+The remaining walls: the game's own per-object code (~40 ms of C logic)
+and the GPU - the translation layer is no longer the bottleneck.
