@@ -309,6 +309,29 @@ void gxrec_delta_flush(void) {
     s_flushing = false;
 }
 
+// The material recorder (RENDERER_CHANNEL.md, the fork): the store snapshots
+// the shadow's material regions into a caller-owned buffer (a GxState-sized
+// copy), the restore re-feeds them - both the shadow (so the next delta flush
+// ships the state to the render thread) and the game-side g_gx (so the game
+// thread's own state matches). The position matrices are not in the shadow
+// (the MBLOCK carries them), so the stored material never touches them.
+void gxrec_delta_snapshot(GxState* out) {
+    for (int i = 0; i < RD_COUNT; i++)
+        memcpy((u8*)out + s_region_table[i].off, (const u8*)&s_shadow + s_region_table[i].off,
+               s_region_table[i].size);
+}
+
+void gxrec_delta_restore(const GxState* in) {
+    for (int i = 0; i < RD_COUNT; i++) {
+        memcpy((u8*)&s_shadow + s_region_table[i].off, (const u8*)in + s_region_table[i].off,
+               s_region_table[i].size);
+        memcpy((u8*)&g_gx + s_region_table[i].off, (const u8*)in + s_region_table[i].off,
+               s_region_table[i].size);
+    }
+    s_regions = (1ull << RD_COUNT) - 1;  // The next flush ships everything
+    s_dirty = 0xFFFFFFFFu;
+}
+
 // The model-draw seam (gx_rec.c port_model_draw): instead of emitting
 // separate MBLOCK and DELTA ops before the draw, the pending matrix block
 // and state delta are serialized here and carried inside the model-draw op
