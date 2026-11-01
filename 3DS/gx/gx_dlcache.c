@@ -142,6 +142,7 @@ typedef struct {
     u8 bt_rank[10];
     void* bt_mem;
     u16* bt_idx;
+    u32 trust_until;  // Content hashes skipped until this frame (S3D_DL_TRUST)
 } DlEntry;
 
 struct DlRecorder {
@@ -1474,7 +1475,6 @@ void GXCallDisplayList(const void* list, u32 nbytes) {
     {
         GX_PROF_ZONE("gx.dl.lookup");
         state_hash = mix(vertex_state_hash(), unit_map_hash(map));
-        list_hash = pre ? pre[0] : hash_bytes_sampled(list, nbytes, 32);
         e = find_slot(list, state_hash);
     }
     t2 = svcGetSystemTick();
@@ -1509,16 +1509,29 @@ void GXCallDisplayList(const void* list, u32 nbytes) {
         return;
     }
 
-    bool same_key = e->list == list && e->state_hash == state_hash;
-    bool hit;
-    {
+    bool same_key = e && e->list == list && e->state_hash == state_hash;
+    bool hit = false, trusted = false;
+    // S3D_DL_TRUST: a static (non-dynamic) entry that validated unchanged
+    // skips the content hashes until trust_until. The game never mutates
+    // these lists; the periodic re-check (a hashed hit every TRUST_WINDOW
+    // frames) bounds any surprise, and the dynamic lists never trust.
+    static int trust_on = 1;
+    CFG_LIVE(trust_on, cfg_int("S3D_DL_TRUST", 1));
+    if (trust_on && same_key && e->valid && !e->dynamic && e->nbytes == nbytes &&
+        (s32)(frame - e->trust_until) < 0) {
+        trusted = true;
+        PROF_COUNT("dl.trusted", 1);
+    } else {
+        list_hash = pre ? pre[0] : hash_bytes_sampled(list, nbytes, 32);
         GX_PROF_ZONE("gx.dl.validate");
         hit = same_key && e->valid && e->nbytes == nbytes && e->list_hash == list_hash && arrays_unchanged(e, pre, pre_mask);
     }
     t3 = svcGetSystemTick();
     dlcp_add(3, t3 - t2);
+    if (trusted) hit = true;
     if (hit) {
         e->last_used = frame;
+        if (!trusted) e->trust_until = frame + 512;  // The re-check renews it
         PROF_COUNT("dl.hits", 1);
         if (dlb_try(e)) {
             dlcp_add(2, svcGetSystemTick() - t3);
