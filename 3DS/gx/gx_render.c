@@ -1513,11 +1513,14 @@ typedef struct {
 static WtEntry s_wt_cache[WT_CACHE_MAX];
 static u8* s_wt_pool;       // linearAlloc'd on first use
 static u32 s_wt_pool_used;
+static u32 s_wt_flushed;    // Cache-flush watermark (gx_render_flush_new_writes)
 static bool s_wt_reset_next;  // Pool/slots full: reset at the next frame begin
 
 // The pool is a bump allocator: a reset frees everything. It only happens at
-// a frame begin (set by s_wt_reset_next), when the previous frame's GPU work
-// is done, so no reset can free vertices the GPU is still reading.
+// a frame begin (set by s_wt_reset_next), after waiting for all submitted GPU
+// work: the pipelined queue can still be drawing the previous frame's
+// tessellations when this frame's begin runs, so a plain reset could free
+// vertices the GPU is still reading.
 void gx_water_tess_invalidate(const void* owner) {
     for (int i = 0; i < WT_CACHE_MAX; i++)
         if (s_wt_cache[i].owner == owner) memset(&s_wt_cache[i], 0, sizeof(WtEntry));
@@ -1525,8 +1528,10 @@ void gx_water_tess_invalidate(const void* owner) {
 
 static void water_tess_frame_begin(void) {
     if (!s_wt_reset_next || !s_wt_pool) return;
+    gx_gpu_wait_idle();  // Rare: only when the pool or the slots filled up
     s_wt_reset_next = false;
     s_wt_pool_used = 0;
+    s_wt_flushed = 0;
     memset(s_wt_cache, 0, sizeof(s_wt_cache));
 }
 
@@ -2024,6 +2029,13 @@ void gx_render_flush_new_writes(void) {
         GSPGPU_FlushDataCache(&s_vbuf[s_vflushed], (s_vused - s_vflushed) * sizeof(GxOutVertex));
     if (s_iused > s_iflushed) GSPGPU_FlushDataCache(&s_ibuf[s_iflushed], (s_iused - s_iflushed) * sizeof(u16));
     if (s_dynused > s_dynflushed) GSPGPU_FlushDataCache(s_dynbuf + s_dynflushed, s_dynused - s_dynflushed);
+    // The water tessellation pool: the CPU writes new grids mid-frame, the
+    // GPU reads them as vertex sources. Without this flush the GPU sees
+    // stale RAM for the freshly generated ranges.
+    if (s_wt_pool && s_wt_pool_used > s_wt_flushed) {
+        GSPGPU_FlushDataCache(s_wt_pool + s_wt_flushed, s_wt_pool_used - s_wt_flushed);
+        s_wt_flushed = s_wt_pool_used;
+    }
     s_vflushed = s_vused;
     s_iflushed = s_iused;
     s_dynflushed = s_dynused;
