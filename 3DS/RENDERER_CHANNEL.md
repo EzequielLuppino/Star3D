@@ -126,3 +126,28 @@ complexity - not worth it. The record-side channel for the immediate
 streams stays as it is (the raw-byte IMM chunks decoded on the render
 thread). The channel's real wins remain the seam, the one-op collapse
 and the DL trust. Reverted to the verified-good state (c387cd8).
+
+## Stage C part 2: the object material cache (scoped)
+
+The function timings refined the target: the map blocks build no material
+(setupToRenderMapBlock = matrices + array binds only; their 6.6 ms is the
+instruction-stream interpreter), and the transparent pass routes through
+the object renderer. The one material-builder is objSetupRenderOpGxState
+(objprint_dolphin.c, 82 GX calls + the stage helpers) - rebuilt per object
+per frame inside objRender (16.1 ms) and the transparent pass (11.8 ms).
+
+The cache: per (model render-op, material key) the game runs the setup
+once and the port replays the stored state. The key is the setup's own
+input set - the render-op pointer (the static model data), the object's
+material-relevant fields (sphereMapIntensity, the aux textures), the
+light count, the fog state and the player flags - computed by the patched
+call site from the same expressions the setup reads. The store snapshots
+the delta shadow's regions (the material state; the matrices stay on the
+per-frame path), the apply re-feeds them through the shadow so the render
+side sees the state without the game rebuilding it. The fallback stays:
+any key mismatch runs the full setup, so the conversion is per-object
+safe from the first frame.
+
+Order: 1) the call sites in objprint_dolphin.c (the render-op loop),
+2) the port module (matcache_3ds.c: cached/store/apply + the shadow
+integration), 3) Azahar correctness, 4) the PERF_WRAP measurement.
