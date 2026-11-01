@@ -316,17 +316,23 @@ void gxrec_delta_flush(void) {
 // thread's own state matches). The position matrices are not in the shadow
 // (the MBLOCK carries them), so the stored material never touches them.
 void gxrec_delta_snapshot(GxState* out) {
-    for (int i = 0; i < RD_COUNT; i++)
-        memcpy((u8*)out + s_region_table[i].off, (const u8*)&s_shadow + s_region_table[i].off,
-               s_region_table[i].size);
+    for (int i = 0; i < RD_COUNT; i++) {
+        u32 size = s_region_table[i].size;
+        // The fog fields (the tail of the pixel state) are per-frame - the
+        // material snapshot must not capture them
+        if (i == RD_PIXEL) size = (u32)offsetof(GxPixelState, fog_type);
+        memcpy((u8*)out + s_region_table[i].off, (const u8*)&s_shadow + s_region_table[i].off, size);
+    }
 }
 
 void gxrec_delta_restore(const GxState* in) {
     for (int i = 0; i < RD_COUNT; i++) {
-        memcpy((u8*)&s_shadow + s_region_table[i].off, (const u8*)in + s_region_table[i].off,
-               s_region_table[i].size);
-        memcpy((u8*)&g_gx + s_region_table[i].off, (const u8*)in + s_region_table[i].off,
-               s_region_table[i].size);
+        u32 size = s_region_table[i].size;
+        // The fog stays per-frame: the restore skips the pixel state's fog
+        // fields (they are the tail of the region)
+        if (i == RD_PIXEL) size = (u32)offsetof(GxPixelState, fog_type);
+        memcpy((u8*)&s_shadow + s_region_table[i].off, (const u8*)in + s_region_table[i].off, size);
+        memcpy((u8*)&g_gx + s_region_table[i].off, (const u8*)in + s_region_table[i].off, size);
     }
     s_regions = (1ull << RD_COUNT) - 1;  // The next flush ships everything
     s_dirty = 0xFFFFFFFFu;

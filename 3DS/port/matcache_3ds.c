@@ -32,7 +32,6 @@ typedef struct {
     u32 bs_hash;
     void* anim;
     int lights;
-    u32 fog_key;
     u32 idx;
     u32 advance;
     int rcp[7];
@@ -42,13 +41,6 @@ typedef struct {
 
 static MatEntry s_entries[64];
 static u32 s_last_advance;
-
-static u32 fog_key(void) {
-    // The fog state the setup reads (the port's own view)
-    const GxPixelState* px = &g_gx.pixel;
-    return (u32)(px->fog_type + (u32)(px->fog_start * 1000.0f) * 7u + (u32)(px->fog_end * 1000.0f) * 13u +
-                 px->fog_color.r * 997u + px->fog_color.g * 31u + px->fog_color.b * 127u);
-}
 
 static u32 bs_hash(const void* data, u32 pos) {
     // Sampled words from the instruction stream at the setup's position
@@ -94,12 +86,11 @@ u32 port_mat_setup(void* obj, void* m, void* am, u32 bs_pos, const void* bs_data
     CFG_LIVE(on, cfg_int("S3D_MAT_CACHE", 0));
     if (!on) return 0xFFFFFFFFu;
     u32 key_hash = bs_hash(bs_data, bs_pos);
-    u32 fk = fog_key();
     for (int i = 0; i < 64; i++) {
         MatEntry* e = &s_entries[i];
         if (!e->used) continue;
         if (e->obj == obj && e->m == m && e->am == am && e->bs_pos == bs_pos && e->bs_hash == key_hash &&
-            e->anim == anim && e->lights == lights && e->fog_key == fk) {
+            e->anim == anim && e->lights == lights) {
             gxrec_delta_restore(&e->state);
             rcp_load(e);
             s_last_advance = e->advance;
@@ -117,7 +108,6 @@ u32 port_mat_setup(void* obj, void* m, void* am, u32 bs_pos, const void* bs_data
 u32 port_mat_end(void* obj, void* m, void* am, u32 bs_pos, const void* bs_data, void* anim, int lights,
                  u32 idx, u32 advance) {
     u32 key_hash = bs_hash(bs_data, bs_pos);
-    u32 fk = fog_key();
     MatEntry* slot = NULL;
     for (int i = 0; i < 64; i++) {
         if (!s_entries[i].used) {
@@ -134,7 +124,6 @@ u32 port_mat_end(void* obj, void* m, void* am, u32 bs_pos, const void* bs_data, 
     slot->bs_hash = key_hash;
     slot->anim = anim;
     slot->lights = lights;
-    slot->fog_key = fk;
     slot->idx = idx;
     slot->advance = advance;
     rcp_save(slot);
