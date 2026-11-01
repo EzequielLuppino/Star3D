@@ -350,6 +350,14 @@ static void execute(u32 op, const u32* p, u32 words) {
         __real_gx_dl_call_hashed(list, nbytes, 0, h0);  // mask 0: the DL side hashes
         return;
     }
+    if (op == GXREC_OP_IMMEXPAND) {
+        GXPrimitive prim = (GXPrimitive)(p[0] & 0xFF);
+        u8 fmt = (u8)((p[0] >> 8) & 0xFF);
+        u16 count = (u16)(p[0] >> 16);
+        u32 n = p[1];
+        gx_vtx_draw_stream(prim, fmt, count, (const u8*)(p + 2), n, NULL);
+        return;
+    }
     if (!gxrec_replay_generated(op, p)) LOG_ONCE(LOG_LEVEL_ERROR, "rt", "unknown recorded opcode %lu", (unsigned long)op);
 }
 
@@ -645,6 +653,7 @@ static void dd_init(void) {
         // Matrices and texgens: display lists can change them
         { GXREC_OP_gx_dl_call_hashed, DD_FORGET, DD_GRP_XF, 0, 0 },
         { GXREC_OP_MODELDRAW, DD_FORGET, DD_GRP_XF, 0, 0 },
+        { GXREC_OP_IMMEXPAND, DD_NEUTRAL, 0, 0, 0 },
         { GXREC_OP_GXLoadPosMtxImm, DD_FILTER, DD_GRP_XF, 0, -1 },  // (mtx, id)
         { GXREC_OP_GXLoadTexMtxImm, DD_FILTER, DD_GRP_XF, 0, -2 },  // (mtx, id, type)
         { GXREC_OP_GXSetTexCoordGen2, DD_FILTER, DD_GRP_XF, 0, 0 },
@@ -877,6 +886,19 @@ static inline void rec_emit(const void* data, u32 n) {
     }
     memcpy(s_imm_ptr, data, n);
     s_imm_ptr += n;
+}
+
+// The immediate-stream fallback (gx_vtx.c imm_submit, for the line/point
+// primitives that expand on the render side): a self-contained op carrying
+// the primitive, the format, the count and the raw bytes; the render side
+// decodes and expands it with its own state (the old behavior)
+void gxrec_put_imm_expand(GXPrimitive prim, u8 fmt, u16 count, const void* data, u32 n) {
+    u32 words = 2 + (n + 3) / 4;
+    u32* p = gxrec_begin(GXREC_OP_IMMEXPAND, words);
+    p[0] = (u32)prim | ((u32)fmt << 8) | ((u32)count << 16);
+    p[1] = n;
+    memcpy(p + 2, data, n);
+    gxrec_end(p + words);
 }
 
 // --- Modes, frame boundary, direct sections --------------------------------------
@@ -1243,7 +1265,10 @@ void __wrap_GXBegin(GXPrimitive type, GXVtxFmt vtxfmt, u16 nverts) {
         dl_emit(b, 3);
         return;
     }
-    gxrec_put_GXBegin(type, vtxfmt, nverts);
+    // The emission (RENDERER_CHANNEL.md stage C): the game thread keeps the
+    // immediate state; the VTX wrappers feed the real emitters, and the
+    // auto-submit decodes into the frame batch instead of recording bytes
+    __real_GXBegin(type, vtxfmt, nverts);
 }
 
 void __wrap_GXEnd(void) {
@@ -1253,7 +1278,7 @@ void __wrap_GXEnd(void) {
         return;
     }
     if (s_dl.on) return;
-    gxrec_put_GXEnd();
+    __real_GXEnd();
 }
 
 void __wrap_GXBeginDisplayList(void* list, u32 size) {
@@ -1447,9 +1472,14 @@ static inline u8* b8(u8* p, u8 v) { *p = v; return p + 1; }
             __real_##name args; \
             return; \
         } \
-        u8 b[12], *q = b; \
-        __VA_ARGS__; \
-        rec_emit(b, (u32)(q - b)); \
+        if (s_dl.on) { \
+            u8 b[12], *q = b; \
+            __VA_ARGS__; \
+            rec_emit(b, (u32)(q - b)); \
+            return; \
+        } \
+        /* The emission: feed the real emitter; the auto-submit decodes */ \
+        __real_##name args; \
     }
 
 VTX(GXPosition3f32, (f32 x, f32 y, f32 z), (x, y, z), q = bef(q, x); q = bef(q, y); q = bef(q, z))
