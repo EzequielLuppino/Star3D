@@ -81,3 +81,21 @@ exactly as it does today.
 - Stage C: material descriptor schema TBD (mirrors the port's per-draw
   state inputs: TEV stages, textures, texgen, matrices, lights, fog,
   blend, cull, depth)
+
+## Progress log
+
+- **Stage B done** (551ea22): the three object-renderer draw sites call
+  port_model_draw instead of GXCallDisplayList (patches/main/
+  objprint_dolphin.c.sed).
+- **Stage A/B done** (bc8b4de): port_model_draw records one GXREC_OP_MODELDRAW
+  op carrying the pending matrix block and state delta (gxrec_delta_take,
+  gx_rec_delta.c); the render side applies them once and runs the DL call.
+  Azahar replay: the model draws collapsed (111 model-draw ops/frame x 16 us
+  carrying the embedded state vs the separate MBLOCK/DELTA ops; recorder ops
+  13.5 -> ~12.4 ms), frames 61 ms, zero crashes through the full route.
+- **DL trust done** (6fac3b9): non-dynamic entries skip the content hashes
+  for 512 frames (renewed by the periodic hashed hit). Azahar: clean route;
+  the hash saving shows on hardware (the Azahar uncached path dominates).
+- Next: the vertex emission (the emitters assemble GxOutVertex + indices so
+  the recorded-DL decode retires), then the material cache for the
+  render-side state bake.
