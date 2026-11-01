@@ -1436,9 +1436,18 @@ static void map_census(const DlEntry* e) {
 void gx_dl_call_hashed(const void* list, u32 nbytes, u32 mask, const u32* hashes) {
     s_call_map = (nbytes >> 31) != 0;
     nbytes &= 0x7FFFFFFFu;
-    s_pre.list = list;
-    s_pre.mask = mask;
-    s_pre.h = hashes;
+    if (mask) {
+        s_pre.list = list;
+        s_pre.mask = mask;
+        s_pre.h = hashes;
+    } else {
+        // No game-thread pre-hashes: the render thread hashes the list and
+        // the arrays itself (the game thread records ~750 unique lists a
+        // frame; its hashing was ~6 ms while the render thread has CPU
+        // headroom under the GPU)
+        s_pre.list = NULL;
+        s_pre.mask = 0;
+    }
     PROF_COUNT("dl.prehashed_calls", 1);
     GXCallDisplayList(list, nbytes);
     s_pre.list = NULL;

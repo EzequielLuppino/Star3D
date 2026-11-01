@@ -1161,50 +1161,12 @@ void gxrec_shutdown(void) {
 #define TIMED_DRAW(counter, call) call
 #endif
 
-// Content hash of an array on the game thread, memoized for the frame like
-// the render side's (gx_dlcache.c)
-static u32 rec_array_hash(const void* data, u32 size) {
-    enum { MEMO = 64 };
-    static struct {
-        const void* data;
-        u32 size, frame, hash;
-    } memo[MEMO];
-    u32 frame = prof_frame_count() + 1;  // 0 never matches an empty slot
-    u32 slot = ((uintptr_t)data >> 4) % MEMO;
-    if (memo[slot].data != data || memo[slot].size != size || memo[slot].frame != frame) {
-        memo[slot].data = data;
-        memo[slot].size = size;
-        memo[slot].frame = frame;
-        memo[slot].hash = gx_dl_array_hash(data, size);
-    }
-    return memo[slot].hash;
-}
-
-// Content hash of a display list on the game thread, memoized for the frame
-// like the array hash above: the same list is drawn many times per frame
-// (the batchable models), and its bytes do not change between calls within
-// a frame. The probe measured the list hashing at ~6 ms of the game thread's
-// ~21 ms recorder cost (750 calls x ~8 us).
-static u32 rec_list_hash(const void* list, u32 nbytes) {
-    enum { MEMO = 64 };
-    static struct {
-        const void* data;
-        u32 size, frame, hash;
-    } memo[MEMO];
-    u32 frame = prof_frame_count() + 1;  // 0 never matches an empty slot
-    u32 slot = ((uintptr_t)list >> 4) % MEMO;
-    if (memo[slot].data != list || memo[slot].size != nbytes || memo[slot].frame != frame) {
-        memo[slot].data = list;
-        memo[slot].size = nbytes;
-        memo[slot].frame = frame;
-        memo[slot].hash = gx_dl_list_hash(list, nbytes);
-    }
-    return memo[slot].hash;
-}
-
-// The display list cache's game-memory hashes (list bytes, indexed vertex
-// arrays) are computed here, on the game thread, which has time to spare
-// while the render thread is the bottleneck (MULTICORE_PLAN.md)
+// The display list cache's game-memory hashes used to be computed on the
+// game thread while the render thread was the bottleneck. The probe showed
+// the game thread now records ~750 unique lists per frame (~8 us each), so
+// the hashing moved to the render thread, which has CPU headroom under the
+// GPU: the recorded call carries mask 0 and the render side hashes the list
+// and the arrays itself (gx_dl_call_hashed, gx_dlcache.c)
 void __wrap_GXCallDisplayList(const void* list, u32 nbytes) {
     PTAG_LEAF(PL_GXDRAW);
     g_ptag_op = GXREC_OP_gx_dl_call_hashed;  // Also for the hashing before it is recorded
@@ -1216,23 +1178,14 @@ void __wrap_GXCallDisplayList(const void* list, u32 nbytes) {
         return;
     }
     if (!list || nbytes == 0) return;
-    u32 h[1 + GX_NUM_ATTR];
-    u32 mask = 0, n = 1;
-    {
-        GX_PROF_ZONE("rt.dl_prehash");
-        PTAG_LEAF(PL_DLHASH);
-        h[0] = rec_list_hash(list, nbytes);
-        for (int a = GX_VA_POS; a <= GX_VA_TEX7; a++) {
-            u8 desc = gxrec_delta_vtx_desc(a);
-            const void* data = gxrec_delta_array_data(a);
-            if (desc < GX_INDEX8 || !data) continue;
-            u32 size = gxrec_delta_array_size(a);
-            mask |= 1u << a;
-            h[n++] = gx_dl_array_key(rec_array_hash(data, size), data, size);
-        }
-    }
+    // The list and array hashes are computed on the render thread now (the
+    // game thread recorded ~750 unique lists per frame at ~8 us each, ~6 ms
+    // of its recorder cost, while the render thread has CPU headroom under
+    // the GPU). mask 0 tells the render side to hash everything itself.
+    u32 h[1];
+    h[0] = 0;
     // Bit 31 of the size marks map-block calls (map census, gx_dlcache.c)
-    gxrec_put_gx_dl_call_hashed(list, nbytes | (scope == PS_MAP ? 0x80000000u : 0), mask, h);
+    gxrec_put_gx_dl_call_hashed(list, nbytes | (scope == PS_MAP ? 0x80000000u : 0), 0, h);
     publish();  // Draws are where the render thread should get going
 }
 
