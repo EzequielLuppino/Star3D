@@ -114,3 +114,15 @@ CP commands while the game records them - executing those format loads
 against the game-side state at record time would make the game-side
 state complete, and the emission then decodes with the right formats.
 That is the next attempt; the seam + collapse + trust stack stays.
+
+## Stage C emission: closed as net-negative (2026-11-01)
+
+Attempt 2 (with the DL-CP mirror on both DL-call paths) still produced
+vertex explosions from the effect engine's immediate streams (the game-
+side state remains incomplete in ways the mirrors did not cover), and
+each mirror adds game-thread walk cost that eats the decode savings.
+Verdict: the immediate-stream emission nets ~2 ms at best for this
+complexity - not worth it. The record-side channel for the immediate
+streams stays as it is (the raw-byte IMM chunks decoded on the render
+thread). The channel's real wins remain the seam, the one-op collapse
+and the DL trust. Reverted to the verified-good state (c387cd8).
