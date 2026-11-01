@@ -4518,3 +4518,17 @@ averages at their spot: 3D with cuts gpu.p3d_us 22.1 ms / rt.replay
 stereo with cuts (19.2 vs 22.1 ms): the second eye costs more than all
 the full-quality effects combined. The daily config (slider-switched)
 holds 30 fps in both modes.
+
+## Stereo-auto water: ripple on, TESS=8 (2026-11-01)
+
+The wave-only mode (S3D_WATER_RIPPLE=0 in the first profile) rendered
+the pond black in 3D - the vsh wave path goes black on the game's water
+(the same black-pond family as bug 38, avoided not fixed). The profile
+now keeps the ripple path (the one 2D uses and the user confirmed right)
+at S3D_WATER_TESS=8, a quarter of the 2D grid: with the tessellation
+cache the ripple's CPU cost is amortized, and the user verified the 3D
+pond looks fine. Also fixed earlier in this round: the n==1 wave-length
+fallback (waves stretched over the mesh's huge triangles) and the
+settings.txt pollution (a touch-menu save during the cut profile
+persisted the cuts; the restore and the shutdown now write the boot
+values back).
