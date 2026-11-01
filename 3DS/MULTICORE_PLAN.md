@@ -4461,3 +4461,18 @@ crash the user hit was the known bug-40 kernel fault (all four Luma dumps,
 old capture crashes included, fault at the same kernel pc 0xFFF1C848) at
 launch stage - the boot never wrote the log, i.e. the failed in-game
 /restart's residue, not the cache; /restart is now off the table.
+
+## Culling verified on hardware; default back to 1 (2026-11-01)
+
+A live remote A/B (set S3D_CULL via cmd.txt, the user watching one spot):
+mode 1 identical to culling off, mode 2 eats whole fronts exactly as the
+wrong winding must. Bug 41 closed - the earlier "errors everywhere" were
+the polluted tests (S3D_OBJ_DIST=30 popping, S3D_DL_CACHE=0 missing
+geometry). S3D_CULL defaults to 1 again. The measured GPU saving at the
+user's spot was small (gpu.p3d_us 59.7 -> 59.4 ms, ~0.5%): that spot is
+dominated by the game's cull-none states (~900 of ~1700 at the hub), so
+the culling win is scene-dependent and comes free where the game culls
+itself. The GPU wall (~59 ms at that spot) needs the other levers next:
+S3D_STEREO_REDUCED (half the fur/grass layers + no blur in the right
+eye), the water grid's GPU cost (12k tessellated triangles x 2 eyes -
+S3D_WATER_TESS), shadows, and the game-thread recorder (~17 ms).
