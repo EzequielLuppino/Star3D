@@ -16,19 +16,24 @@
 typedef struct {
     const char* key;
     int stereo_value;
+    int boot_default;  // The port's own default (cfg_int fallback at the snapshot)
 } ProfileKey;
 
-// The cuts config the 30 fps-with-3D chase was measured with (27.4 ms/frame)
+// The cuts config the 30 fps-with-3D chase was measured with (27.4 ms/frame).
+// boot_default must match the reader's cfg default (lod_3ds.c, gx_init.c,
+// gx_render.c, gx_copy.c): the snapshot's cfg_int falls back to it when the
+// key was never set, so a wrong value here restores broken settings (the
+// first take restored OBJ_DIST/OBJ_MINPX to 0 and hid every object in 2D).
 static const ProfileKey s_profile[] = {
-    { "S3D_OBJ_DIST", 30 },
-    { "S3D_OBJ_MINPX", 45 },
-    { "S3D_PLANTS", 0 },
-    { "S3D_SHADOWS", 0 },
-    { "S3D_FUR_MODE", 0 },
-    { "S3D_GRASS_BUDGET", 0 },
-    { "S3D_GPU_BLUR", 0 },
-    { "S3D_WATER_TESS", 0 },
-    { "S3D_WATER_RIPPLE", 0 },
+    { "S3D_OBJ_DIST", 30, 100 },
+    { "S3D_OBJ_MINPX", 45, 10 },
+    { "S3D_PLANTS", 0, 1 },
+    { "S3D_SHADOWS", 0, 1 },
+    { "S3D_FUR_MODE", 0, 1 },
+    { "S3D_GRASS_BUDGET", 0, 8 },
+    { "S3D_GPU_BLUR", 0, 1 },
+    { "S3D_WATER_TESS", 0, 16 },
+    { "S3D_WATER_RIPPLE", 0, 1 },
 };
 #define PROFILE_COUNT (sizeof(s_profile) / sizeof(s_profile[0]))
 
@@ -36,7 +41,8 @@ static int s_boot[PROFILE_COUNT];
 static bool s_last_stereo;
 
 void stereo_auto_init(void) {
-    for (u32 i = 0; i < PROFILE_COUNT; i++) s_boot[i] = cfg_int(s_profile[i].key, 0);
+    for (u32 i = 0; i < PROFILE_COUNT; i++)
+        s_boot[i] = cfg_int(s_profile[i].key, s_profile[i].boot_default);
     s_last_stereo = false;  // The first frame applies the profile if the slider is up
 }
 
