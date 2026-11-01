@@ -27,11 +27,12 @@
 // vertex shading
 static int cull_setting(void) {
     static int v = -1;
-    // Default off: the culling eats faces the game draws (bug 41 - the user
-    // sees backface errors everywhere with it on, and clean with it off), so
-    // correctness wins by default; the 30 fps cuts env sets S3D_CULL=1 for
-    // the GPU saving. Value 2 is the opposite winding (drops front faces).
-    CFG_LIVE(v, cfg_int("S3D_CULL", 0));
+    // On by default: verified clean on hardware (2026-11-01, a live remote
+    // A/B: mode 1 identical to culling off at the hub, mode 2 eats whole
+    // fronts as the wrong winding must). The earlier "culling errors" (bug
+    // 41) were the polluted tests - S3D_OBJ_DIST=30 object popping and
+    // S3D_DL_CACHE=0's missing geometry - not the culling itself.
+    CFG_LIVE(v, cfg_int("S3D_CULL", 1));
     return v;
 }
 
