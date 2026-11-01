@@ -1,5 +1,6 @@
 #include <3ds.h>
 #include <stdlib.h>
+#include <string.h>
 #include "dl_guard.h"
 #include "log.h"
 #include "profiler.h"
@@ -17,6 +18,13 @@ void* dl_alloc(size_t n) {
     h[1] = (u32)n;
     ((u32*)(base + 8 + n))[0] = DL_GUARD_MAGIC;
     return base + 8;
+}
+
+void* dl_calloc(size_t n, size_t sz) {
+    if (!n || !sz || n > DL_GUARD_MAX / sz) return NULL;
+    void* p = dl_alloc(n * sz);
+    if (p) memset(p, 0, n * sz);
+    return p;
 }
 
 void* dl_realloc(void* p, size_t n) {

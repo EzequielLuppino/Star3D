@@ -31,6 +31,7 @@
 // corruption belongs to instead of faulting inside _free_r. free_entry calls
 // dl_free directly with the table names; everything else reports "dl".
 #define malloc(n) dl_alloc(n)
+#define calloc(n, sz) dl_calloc((n), (sz))
 #define realloc(p, n) dl_realloc((p), (n))
 #define free(p) dl_free((p), "dl", NULL)
 #include "profiler.h"

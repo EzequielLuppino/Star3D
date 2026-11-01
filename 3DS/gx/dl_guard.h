@@ -9,5 +9,6 @@
 // block header). The diagnostics name the table and the entry, and the crash
 // handler's [CRASH] block preserves them in the log.
 void* dl_alloc(size_t n);
+void* dl_calloc(size_t n, size_t sz);
 void* dl_realloc(void* p, size_t n);
 void dl_free(void* p, const char* what, const void* entry);
