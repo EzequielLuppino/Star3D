@@ -1167,9 +1167,30 @@ void gxrec_shutdown(void) {
 // the hashing moved to the render thread, which has CPU headroom under the
 // GPU: the recorded call carries mask 0 and the render side hashes the list
 // and the arrays itself (gx_dl_call_hashed, gx_dlcache.c)
+// The game-side model-draw seam (RENDERER_CHANNEL.md stage B): the patched
+// GXCallDisplayList sites in the object renderer call this directly. v1
+// records the draw exactly like the GX wrapper below; the next step embeds
+// the pending state delta and matrix block into this one op.
+void port_model_draw(const void* list, u32 nbytes) {
+    PTAG_LEAF(PL_GXDRAW);
+    g_ptag_op = GXREC_OP_gx_dl_call_hashed;
+    u8 scope = g_ptag_scope[THREAD_SLOT_GAME];
+    g_ptag_dl_calls[scope]++;
+    g_ptag_dl_bytes[scope] += nbytes;
+    if (!gxrec_recording()) {
+        GXCallDisplayList(list, nbytes);
+        return;
+    }
+    if (!list || nbytes == 0) return;
+    u32 h[1];
+    h[0] = 0;
+    gxrec_put_gx_dl_call_hashed(list, nbytes | (scope == PS_MAP ? 0x80000000u : 0), 0, h);
+    publish();  // Draws are where the render thread should get going
+}
+
 void __wrap_GXCallDisplayList(const void* list, u32 nbytes) {
     PTAG_LEAF(PL_GXDRAW);
-    g_ptag_op = GXREC_OP_gx_dl_call_hashed;  // Also for the hashing before it is recorded
+    g_ptag_op = GXREC_OP_gx_dl_call_hashed;
     u8 scope = g_ptag_scope[THREAD_SLOT_GAME];
     g_ptag_dl_calls[scope]++;
     g_ptag_dl_bytes[scope] += nbytes;

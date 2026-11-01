@@ -317,3 +317,8 @@ s|^        gObjFuzzPassActive = 0;$|&\
 s|^    gObjFuzzPassActive = 1;$|&\
     if (fhFurLite(model, rop, ropIdx)) return 1;|
 }
+# RENDERER_CHANNEL.md stage B: the model draw sites call the port seam
+# (gx_rec.c port_model_draw) instead of the GX stream entry
+1i\
+void port_model_draw(const void* list, unsigned size);
+s|GXCallDisplayList(dl->dlist, dl->dlistSize);|port_model_draw(dl->dlist, dl->dlistSize);|g
