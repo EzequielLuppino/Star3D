@@ -108,8 +108,9 @@ u32 port_mat_setup(void* obj, void* m, void* am, u32 bs_pos, const void* bs_data
     if (!on || !g_map_loaded) return 0xFFFFFFFFu;  // The title/attract scenes stay uncached
     u32 key_hash = bs_hash(bs_data, bs_pos);
     u32 lh = light_hash();
-    {
-        MatEntry* e = &s_entries[((uintptr_t)obj >> 4) & 255];
+    u32 pair = ((uintptr_t)obj >> 4) & 127;
+    for (int w = 0; w < 2; w++) {
+        MatEntry* e = &s_entries[pair * 2 + w];
         if (e->used && e->obj == obj && e->m == m && e->am == am && e->bs_pos == bs_pos && e->bs_hash == key_hash &&
             e->anim == anim && e->lights == lights && e->lh == lh) {
             e->last_used = prof_frame_count();
@@ -136,7 +137,12 @@ u32 port_mat_end(void* obj, void* m, void* am, u32 bs_pos, const void* bs_data, 
                  u32 idx, u32 advance) {
     u32 key_hash = bs_hash(bs_data, bs_pos);
     u32 lh = light_hash();
-    MatEntry* slot = &s_entries[((uintptr_t)obj >> 4) & 255];
+    u32 pair = ((uintptr_t)obj >> 4) & 127;
+    MatEntry* slot = &s_entries[pair * 2];
+    if (slot->used && s_entries[pair * 2 + 1].used == 0) slot = &s_entries[pair * 2 + 1];
+    else if (slot->used && s_entries[pair * 2 + 1].used &&
+             s_entries[pair * 2 + 1].last_used < slot->last_used)
+        slot = &s_entries[pair * 2 + 1];
     slot->used = 1;
     slot->obj = obj;
     slot->m = m;
