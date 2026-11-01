@@ -279,6 +279,7 @@ static void dlb_keep_init(void) {
     // position matrices)
     s_dlb_keep[GXREC_OP_DELTA] = 1;
     s_dlb_keep[GXREC_OP_MBLOCK] = 1;
+    s_dlb_keep[GXREC_OP_MODELDRAW] = 1;
 }
 
 // gx_dlcache.c, at every flush of held instances: what caused it
@@ -337,6 +338,16 @@ static void execute(u32 op, const u32* p, u32 words) {
     }
     if (op == GXREC_OP_MBLOCK) {
         gxrec_delta_mblk_apply(p, words);
+        return;
+    }
+    if (op == GXREC_OP_MODELDRAW) {
+        const void* list = (const void*)(uintptr_t)p[0];
+        u32 nbytes = p[1], mw = p[2], dw = p[3];
+        const u32* st = p + 4;
+        static const u32 h0[1] = { 0 };
+        if (mw) gxrec_delta_mblk_apply(st, mw);
+        if (dw) gxrec_delta_apply(st + mw, dw);
+        __real_gx_dl_call_hashed(list, nbytes, 0, h0);  // mask 0: the DL side hashes
         return;
     }
     if (!gxrec_replay_generated(op, p)) LOG_ONCE(LOG_LEVEL_ERROR, "rt", "unknown recorded opcode %lu", (unsigned long)op);
@@ -633,6 +644,7 @@ static void dd_init(void) {
         { GXREC_OP_GXSetTexCopyDst, DD_NEUTRAL, 0, 0, 0 },
         // Matrices and texgens: display lists can change them
         { GXREC_OP_gx_dl_call_hashed, DD_FORGET, DD_GRP_XF, 0, 0 },
+        { GXREC_OP_MODELDRAW, DD_FORGET, DD_GRP_XF, 0, 0 },
         { GXREC_OP_GXLoadPosMtxImm, DD_FILTER, DD_GRP_XF, 0, -1 },  // (mtx, id)
         { GXREC_OP_GXLoadTexMtxImm, DD_FILTER, DD_GRP_XF, 0, -2 },  // (mtx, id, type)
         { GXREC_OP_GXSetTexCoordGen2, DD_FILTER, DD_GRP_XF, 0, 0 },
@@ -1173,7 +1185,7 @@ void gxrec_shutdown(void) {
 // the pending state delta and matrix block into this one op.
 void port_model_draw(const void* list, u32 nbytes) {
     PTAG_LEAF(PL_GXDRAW);
-    g_ptag_op = GXREC_OP_gx_dl_call_hashed;
+    g_ptag_op = GXREC_OP_MODELDRAW;
     u8 scope = g_ptag_scope[THREAD_SLOT_GAME];
     g_ptag_dl_calls[scope]++;
     g_ptag_dl_bytes[scope] += nbytes;
@@ -1182,9 +1194,18 @@ void port_model_draw(const void* list, u32 nbytes) {
         return;
     }
     if (!list || nbytes == 0) return;
-    u32 h[1];
-    h[0] = 0;
-    gxrec_put_gx_dl_call_hashed(list, nbytes | (scope == PS_MAP ? 0x80000000u : 0), 0, h);
+    // One op per draw: the pending matrix block and state delta travel
+    // inside the model-draw op instead of as separate MBLOCK/DELTA ops
+    u32 mw, dw;
+    const u32* st = gxrec_delta_take(&mw, &dw);
+    u32 words = 4 + mw + dw;
+    u32* p = gxrec_begin(GXREC_OP_MODELDRAW, words);
+    p[0] = (u32)(uintptr_t)list;
+    p[1] = nbytes | (scope == PS_MAP ? 0x80000000u : 0);
+    p[2] = mw;
+    p[3] = dw;
+    memcpy(p + 4, st, (mw + dw) * 4);
+    gxrec_end(p + words);
     publish();  // Draws are where the render thread should get going
 }
 

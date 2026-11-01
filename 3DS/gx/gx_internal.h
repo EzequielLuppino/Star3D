@@ -271,6 +271,11 @@ void gxrec_delta_get_scissor(u32 out[4]);
 // from the real state, and switch the mode at a frame start
 void gxrec_delta_flush(void);
 void gxrec_delta_apply(const u32* p, u32 words);
+// Serializes the pending matrix block and state delta into a static buffer
+// (the same bodies the MBLOCK/DELTA ops carry, without the op headers) and
+// clears the pending state; returns the word counts. Single-threaded: the
+// buffer stays valid until the next take or flush.
+const u32* gxrec_delta_take(u32* mwords, u32* dwords);
 void gxrec_delta_mblk_apply(const u32* p, u32 words);
 void gxrec_delta_refresh(void);
 void gxrec_delta_frame_begin(void);

@@ -29,9 +29,10 @@ enum {
     GXREC_OP_FRAME,   // Frame boundary (port_frame_boundary): black, reset, 3D slider bits
     GXREC_OP_DELTA,   // State delta (gx_rec_delta.c): regions bitmap, flags, dirty, vtx_gen, payload
     GXREC_OP_MBLOCK,  // Matrix block (gx_rec_delta.c): count, then (header, matrix) entries
+    GXREC_OP_MODELDRAW,  // Model draw (port_model_draw): list, size|scope bit, mblk words, delta words, [mblk][delta]
     GXREC_OP_RESERVED
 };
-#define GXREC_OP_RESERVED_NAMES [GXREC_OP_WRAP] = "(wrap)", [GXREC_OP_IMM] = "immediate-mode data",     [GXREC_OP_FRAME] = "frame boundary", [GXREC_OP_DELTA] = "(state delta)", [GXREC_OP_MBLOCK] = "(matrix block)",
+#define GXREC_OP_RESERVED_NAMES [GXREC_OP_WRAP] = "(wrap)", [GXREC_OP_IMM] = "immediate-mode data",     [GXREC_OP_FRAME] = "frame boundary", [GXREC_OP_DELTA] = "(state delta)", [GXREC_OP_MBLOCK] = "(matrix block)", [GXREC_OP_MODELDRAW] = "model draw",
 
 extern bool g_gxrec_on;               // Recording (mode 1 or 2), game thread only
 extern __thread bool t_gxrec_direct;  // This thread runs GX calls directly

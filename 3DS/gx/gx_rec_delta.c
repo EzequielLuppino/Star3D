@@ -176,7 +176,6 @@ _Static_assert(offsetof(GxState, tev.ind_map) ==
 static bool s_on;        // Delta mode for this frame (S3D_RT_DELTA non-zero)
 static bool s_verify;    // PROFILE=1, S3D_RT_DELTA=2: also record the real commands
 static GxState s_shadow; // Game thread's mirror of g_gx (fields setters change)
-
 // Bookkeeping the recorder used to keep in gx_rec.c: which arrays a display
 // list call can read (its hashes), and the scissor answered to GXGetScissor
 static u8 s_vtx_desc[GX_NUM_ATTR];
@@ -308,6 +307,47 @@ void gxrec_delta_flush(void) {
         GX_PROF_COUNT("rec.delta_flushed", 1);
     }
     s_flushing = false;
+}
+
+// The model-draw seam (gx_rec.c port_model_draw): instead of emitting
+// separate MBLOCK and DELTA ops before the draw, the pending matrix block
+// and state delta are serialized here and carried inside the model-draw op
+// (RENDERER_CHANNEL.md stage A/B). Layout: [mblk body][delta body], sizes
+// returned in mwords/dwords.
+const u32* gxrec_delta_take(u32* mwords, u32* dwords) {
+    static u32 buf[1 + MBL_MAX * MBL_ENTRY_WORDS + 6 + (sizeof(s_shadow) / 4)];
+    u32* q = buf;
+    if (s_mblk_count) {
+        *q++ = s_mblk_count;
+        for (u32 i = 0; i < s_mblk_count; i++) {
+            const u32* e = &s_mblk[2 + i * MBL_ENTRY_WORDS];
+            u32 nw = e[0] & 0xFF;
+            memcpy(q, e, (1 + nw) * 4);
+            q += 1 + nw;
+        }
+        s_mblk_count = 0;
+    }
+    *mwords = (u32)(q - buf);
+    if (s_regions || s_flags || s_dirty || s_vtx_gen || s_verify) {
+        *q++ = (u32)s_regions;
+        *q++ = (u32)(s_regions >> 32);
+        *q++ = s_flags;
+        *q++ = s_dirty;
+        *q++ = s_vtx_gen;
+        *q++ = s_verify ? shadow_hash(&s_shadow) : 0;
+        for (int i = 0; i < RD_COUNT; i++)
+            if (s_regions & (1ull << i)) {
+                memcpy(q, (const u8*)&s_shadow + s_region_table[i].off, s_region_table[i].size);
+                q += s_region_table[i].size / 4;
+            }
+        s_regions = 0;
+        s_flags = 0;
+        s_dirty = 0;
+        s_vtx_gen = 0;
+        GX_PROF_COUNT("rec.delta_taken", 1);
+    }
+    *dwords = (u32)(q - buf) - *mwords;
+    return buf;
 }
 
 // The consumer side: apply one recorded delta packet
