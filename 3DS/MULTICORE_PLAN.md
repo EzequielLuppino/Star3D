@@ -4447,3 +4447,17 @@ Conclusions that shaped the work:
    are the next two translation-layer costs; the recorder's state-delta
    and matrix-block ops (~11 ms) are the same targets the DL batch and
    RT dedup were built for.
+
+## Water tess bake: verified on hardware (2026-11-01)
+
+The user's pond run with the cache build (61AED156): 100% hit rate
+(gx.water_tess_hits 5/frame = every active tessellation), the drawc "water"
+step 20.4 -> 0.90 ms/frame, wtphase vert 19.2 -> 0.00 ms, gx.dl.segment
+22.5 -> 3.96 ms. The light pond view sampled 32.6 ms/frame (~30 fps); the
+heavy view stays GPU-bound (gpu.p3d_us ~58 ms). Remaining translation-layer
+costs: the game-thread recorder ~17 ms (state deltas 1199/frame, matrix
+blocks 591, GXSetTexCoordGen2 747), render-thread uniforms ~4.6 ms. The
+crash the user hit was the known bug-40 kernel fault (all four Luma dumps,
+old capture crashes included, fault at the same kernel pc 0xFFF1C848) at
+launch stage - the boot never wrote the log, i.e. the failed in-game
+/restart's residue, not the cache; /restart is now off the table.
