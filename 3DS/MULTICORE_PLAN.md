@@ -4507,3 +4507,14 @@ OBJ_MINPX 45, plants/shadows/fur/grass/blur off, water tess + ripple
 off). Touch-menu row "3D: auto cut effects" (default on). Live switch:
 every key is re-read per frame, and cfg_gen bumps invalidate the water
 tess cache entries cleanly.
+
+## Stereo-auto verified: both modes ~37 fps (2026-11-01)
+
+The user's session with the fixed build (E2BBF74A): 15+ clean slider
+transitions logged (cut-effects on, boot restore off). Per-window
+averages at their spot: 3D with cuts gpu.p3d_us 22.1 ms / rt.replay
+25.9 ms / sceneRender 18.0 ms (~38 fps); 2D full quality 19.2 / 27.4 /
+19.3 (~37 fps). Notably mono full quality is cheaper on the GPU than
+stereo with cuts (19.2 vs 22.1 ms): the second eye costs more than all
+the full-quality effects combined. The daily config (slider-switched)
+holds 30 fps in both modes.
