@@ -98,7 +98,7 @@ u32 port_mat_setup(void* obj, void* m, void* am, u32 bs_pos, const void* bs_data
     // and the key's inputs are being tightened)
     static int on = -1;
     CFG_LIVE(on, cfg_int("S3D_MAT_CACHE", 0));
-    if (!on) return 0xFFFFFFFFu;
+    if (!on || !g_map_loaded) return 0xFFFFFFFFu;  // The title/attract scenes stay uncached
     u32 key_hash = bs_hash(bs_data, bs_pos);
     u32 lh = light_hash();
     for (int i = 0; i < 256; i++) {

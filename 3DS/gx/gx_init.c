@@ -402,6 +402,7 @@ extern void __real_fhNoteMapLoaded(int mapId);
 void diag_map_loaded(int map_id);  // port/diag_3ds.c (S3D_GPU_SWEEP)
 void __wrap_fhNoteMapLoaded(int mapId) {
     __real_fhNoteMapLoaded(mapId);
+    g_map_loaded = 1;  // The material cache applies to the gameplay maps only
     diag_map_loaded(mapId);
     gpu_trace_config();
     if (s_gpu_trace_map < 0 || mapId != s_gpu_trace_map || s_gpu_trace_from != 0x7FFFFFFF) return;

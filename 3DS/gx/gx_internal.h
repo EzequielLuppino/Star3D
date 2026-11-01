@@ -224,6 +224,7 @@ typedef struct {
 } GxState;
 
 extern GxState g_gx;
+extern bool g_map_loaded;  // Set by the map loader (gx_init.c); gates the material cache
 
 // EFB x -> top screen x (pixels of the 400x240 screen): the 4:3 image is
 // pillarboxed (40 + x/2); in the game's 16:9 mode it fills the screen
