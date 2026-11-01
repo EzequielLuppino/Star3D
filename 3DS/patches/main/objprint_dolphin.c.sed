@@ -322,3 +322,22 @@ s|^    gObjFuzzPassActive = 1;$|&\
 1i\
 void port_model_draw(const void* list, unsigned size);
 s|GXCallDisplayList(dl->dlist, dl->dlistSize);|port_model_draw(dl->dlist, dl->dlistSize);|g
+# RENDERER_CHANNEL.md: the object material cache (port/matcache_3ds.c). The
+# setup call site (the modelDoRenderInstrs one, below) routes through
+# fhSetupOpAll: the fur-fast path keeps the existing fhSetupOp, the general
+# path tries the material cache first.
+1i\
+u32 port_mat_setup(void* obj, void* m, void* am, u32 bs_pos, const void* bs_data, void* anim, int lights);\
+u32 port_mat_end(void* obj, void* m, void* am, u32 bs_pos, const void* bs_data, void* anim, int lights, u32 idx, u32 advance);\
+u32 port_mat_advance(void);
+/^static void fhDoRenderInstrs(GameObject\* obj, GameObject\* obj2, u8\* m, u8 passMask) {$/i\
+static u32 fhSetupOpAll(GameObject* obj, u8* m, int* am, MtxBitStream* bs) {\
+    if (fhCur & 2) return fhSetupOp(obj, m, am, bs);\
+    port_fur_mtx_flush(~0u);\
+    { int matPos0 = bs->pos; u32 matIdx = port_mat_setup(obj, m, am, bs->pos, bs->data, (void*)&obj->anim, gObjSelectedLightCount);\
+      if (matIdx != 0xFFFFFFFFu) { bs->pos += port_mat_advance(); return matIdx; }\
+      u32 matSetupIdx = objSetupRenderOpGxState(obj, m, am, bs);\
+      port_mat_end(obj, m, am, matPos0, bs->data, (void*)&obj->anim, gObjSelectedLightCount, matSetupIdx, bs->pos - matPos0);\
+      return matSetupIdx; }\
+}
+s/^\( *\)idx = fhCur ? fhSetupOp(obj, m, am, &bs) : objSetupRenderOpGxState(obj, m, am, &bs);$/\1idx = fhSetupOpAll(obj, m, am, \&bs);/
