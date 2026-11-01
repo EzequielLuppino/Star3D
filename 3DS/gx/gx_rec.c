@@ -358,10 +358,6 @@ static void execute(u32 op, const u32* p, u32 words) {
         gx_vtx_draw_stream(prim, fmt, count, (const u8*)(p + 2), n, NULL);
         return;
     }
-    if (op == GXREC_OP_IMMDRAW) {
-        gx_render_imm_draw((u16)p[0], (u16)p[1], (u16)p[2], p[3]);
-        return;
-    }
     if (!gxrec_replay_generated(op, p)) LOG_ONCE(LOG_LEVEL_ERROR, "rt", "unknown recorded opcode %lu", (unsigned long)op);
 }
 
@@ -658,7 +654,6 @@ static void dd_init(void) {
         { GXREC_OP_gx_dl_call_hashed, DD_FORGET, DD_GRP_XF, 0, 0 },
         { GXREC_OP_MODELDRAW, DD_FORGET, DD_GRP_XF, 0, 0 },
         { GXREC_OP_IMMEXPAND, DD_NEUTRAL, 0, 0, 0 },
-        { GXREC_OP_IMMDRAW, DD_NEUTRAL, 0, 0, 0 },
         { GXREC_OP_GXLoadPosMtxImm, DD_FILTER, DD_GRP_XF, 0, -1 },  // (mtx, id)
         { GXREC_OP_GXLoadTexMtxImm, DD_FILTER, DD_GRP_XF, 0, -2 },  // (mtx, id, type)
         { GXREC_OP_GXSetTexCoordGen2, DD_FILTER, DD_GRP_XF, 0, 0 },
@@ -891,18 +886,6 @@ static inline void rec_emit(const void* data, u32 n) {
     }
     memcpy(s_imm_ptr, data, n);
     s_imm_ptr += n;
-}
-
-// The immediate-emission draw op (gx_vtx.c imm_submit): the decoded mesh's
-// location in the frame's emission buffers
-void gxrec_put_imm_draw(u16 vbase, u16 vcount, u16 ibase, u32 icount) {
-    u32* p = gxrec_begin(GXREC_OP_IMMDRAW, 4);
-    p[0] = vbase;
-    p[1] = vcount;
-    p[2] = ibase;
-    p[3] = icount;
-    gxrec_end(p + 4);
-    publish();  // Draws are where the render thread should get going
 }
 
 // The immediate-stream fallback (gx_vtx.c imm_submit, for the line/point
