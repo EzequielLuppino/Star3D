@@ -98,6 +98,31 @@ u32 port_mat_setup(void* obj, void* m, void* am, u32 bs_pos, const void* bs_data
             return e->idx;
         }
     }
+    // The miss diagnostic: against this object's own entry, which key part
+    // changed? (same instruction content + differing anim/lights = the
+    // fixable inputs; a differing hash = the instructions themselves moved)
+    {
+        bool same_bs = false, diff_anim = false, diff_lights = false;
+        for (int i = 0; i < 64; i++) {
+            MatEntry* e = &s_entries[i];
+            if (!e->used) continue;
+            if (e->obj == obj && e->m == m && e->am == am && e->bs_pos == bs_pos) {
+                if (e->bs_hash == key_hash) {
+                    same_bs = true;
+                    if (e->anim != anim) diff_anim = true;
+                    if (e->lights != lights) diff_lights = true;
+                }
+            }
+        }
+        if (same_bs) {
+            PROF_COUNT("mat.miss_samebs", 1);
+            if (diff_anim) PROF_COUNT("mat.miss_anim", 1);
+            if (diff_lights) PROF_COUNT("mat.miss_lights", 1);
+            if (!diff_anim && !diff_lights) PROF_COUNT("mat.miss_stable", 1);
+        } else {
+            PROF_COUNT("mat.miss_other", 1);
+        }
+    }
     PROF_COUNT("mat.misses", 1);
     return 0xFFFFFFFFu;
 }
