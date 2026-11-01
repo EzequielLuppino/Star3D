@@ -107,15 +107,13 @@ typedef struct {
 // from the cache would overwrite those).
 static const u64 s_mat_mask = (1ull << RD_NUM_TEXGENS) | (1ull << RD_NUM_CHANS) | (1ull << RD_CHAN) |
                               (1ull << RD_CHAN_MAT) | (1ull << RD_CHAN_AMB) | (1ull << RD_PIXEL) |
-                              (1ull << RD_LINE_POINT) | (1ull << RD_TEX_OFFSET_EN) | (1ull << RD_TEXCOPY) |
-                              (1ull << RD_TEV_STAGES) | (1ull << RD_TEV_REGS) | (1ull << RD_TEV_KCOLORS) |
-                              (1ull << RD_TEV_SWAP) | (1ull << RD_TEV_NUM) | (1ull << RD_TEV_WARP) |
-                              (1ull << RD_TEV_IND) | (1ull << RD_TEV_IND_MAP) | (1ull << RD_TEV_RIPPLE) |
-                              (1ull << RD_TEV_NUM_IND) | (1ull << RD_LIGHT0) | (1ull << RD_LIGHT1) |
-                              (1ull << RD_LIGHT2) | (1ull << RD_LIGHT3) | (1ull << RD_LIGHT4) |
-                              (1ull << RD_LIGHT5) | (1ull << RD_LIGHT6) | (1ull << RD_LIGHT7) |
-                              (1ull << RD_TEX0) | (1ull << RD_TEX1) | (1ull << RD_TEX2) | (1ull << RD_TEX3) |
-                              (1ull << RD_TEX4) | (1ull << RD_TEX5) | (1ull << RD_TEX6) | (1ull << RD_TEX7);
+                              (1ull << RD_TEX_OFFSET_EN) |
+                              (1ull << RD_TEXCOPY) | (1ull << RD_TEV_STAGES) | (1ull << RD_TEV_REGS) |
+                              (1ull << RD_TEV_KCOLORS) | (1ull << RD_TEV_SWAP) | (1ull << RD_TEV_NUM) |
+                              (1ull << RD_TEV_WARP) | (1ull << RD_TEV_IND) | (1ull << RD_TEV_IND_MAP) |
+                              (1ull << RD_TEV_RIPPLE) | (1ull << RD_TEV_NUM_IND) | (1ull << RD_TEX0) |
+                              (1ull << RD_TEX1) | (1ull << RD_TEX2) | (1ull << RD_TEX3) | (1ull << RD_TEX4) |
+                              (1ull << RD_TEX5) | (1ull << RD_TEX6) | (1ull << RD_TEX7);
 
 static const DeltaRegion s_region_table[RD_COUNT] = {    [RD_VTX_DESC] = RDREG(vtx_desc),
     [RD_VTX_FMT] = RDREG(vtx_fmt),
