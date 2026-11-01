@@ -952,11 +952,14 @@ static void dump_tex(const C3D_Tex* t, int n) {
     LOG_INFO("dump", "dumped tex%d: %ux%u fmt %d", n, t->width, t->height, t->fmt);
 }
 
+static void water_tess_frame_begin(void);  // gx_render.c: water tess pool reset
+
 void gx_render_frame_begin(void) {
     PROF_COUNT("c3d.unif_vec4", g_c3d_unif_stats[0]);
     PROF_COUNT("c3d.unif_vec4_skipped", g_c3d_unif_stats[1]);
     PROF_COUNT("c3d.unif_bool_skipped", g_c3d_unif_stats[2]);
     memset(g_c3d_unif_stats, 0, sizeof(g_c3d_unif_stats));
+    water_tess_frame_begin();  // Pool/slots full last frame: safe to reset now
     s_discard = false;
     // Switches the touch UI can change while the game runs
     {
@@ -1480,8 +1483,55 @@ static u64 s_drawc_warp;
 // Phase split of the active tessellation calls: scan / alloc / vert / idx
 static u64 s_wt_ph[4];
 
-static bool water_tessellate(bool packed, const void** verts, const u16** indices, u32* count, float pos_scale,
-                             float tc_scale) {
+// --- Water tessellation cache ------------------------------------------------------
+//
+// The tessellated output of a draw is a pure function of its source vertices
+// (the DL cache's static buffers), the tessellation level and the water
+// settings: the waves animate in the vertex shader and the caustic table is
+// static, so nothing in the generated grid changes per frame. Regenerating
+// it every frame was the render thread's biggest single cost (~20 ms at the
+// pond: 12k grid triangles, drawc's "water" step). The cache keys on the
+// owner (the DL entry - its pointer identity is invalidated when the entry
+// is freed), the source buffers, the level and the config generation, and
+// replays the stored grid instead.
+#define WT_CACHE_MAX 64
+#define WT_POOL_BYTES (1024 * 1024)
+
+typedef struct {
+    const void* owner;
+    const void* verts;   // Source vertex buffer pointer (part of the key)
+    const u16* indices;  // Source index buffer pointer
+    u32 tris;            // Input triangle count (batched calls vary it)
+    bool packed;
+    int n;
+    u32 gen;      // cfg_gen at insert: a live settings change invalidates all
+    u32 count;    // Output index count
+    u8* ov;       // Output vertices in the pool
+    u16* oi;      // Output indices in the pool
+} WtEntry;
+
+static WtEntry s_wt_cache[WT_CACHE_MAX];
+static u8* s_wt_pool;       // linearAlloc'd on first use
+static u32 s_wt_pool_used;
+static bool s_wt_reset_next;  // Pool/slots full: reset at the next frame begin
+
+// The pool is a bump allocator: a reset frees everything. It only happens at
+// a frame begin (set by s_wt_reset_next), when the previous frame's GPU work
+// is done, so no reset can free vertices the GPU is still reading.
+void gx_water_tess_invalidate(const void* owner) {
+    for (int i = 0; i < WT_CACHE_MAX; i++)
+        if (s_wt_cache[i].owner == owner) memset(&s_wt_cache[i], 0, sizeof(WtEntry));
+}
+
+static void water_tess_frame_begin(void) {
+    if (!s_wt_reset_next || !s_wt_pool) return;
+    s_wt_reset_next = false;
+    s_wt_pool_used = 0;
+    memset(s_wt_cache, 0, sizeof(s_wt_cache));
+}
+
+static bool water_tessellate(bool packed, const void* owner, const void** verts, const u16** indices, u32* count,
+                             float pos_scale, float tc_scale) {
     u64 w0 = svcGetSystemTick();
     PROF_COUNT("drawc.water_calls", 1);
     if (!water_warp_draw()) {
@@ -1539,11 +1589,6 @@ static bool water_tessellate(bool packed, const void** verts, const u16** indice
     int n = water_tess_level(tris, want);
     u32 vper = (u32)((n + 1) * (n + 2) / 2), tper = (u32)(n * n);
     u32 vsize = packed ? sizeof(GxPackedVertex) : sizeof(GxOutVertex);
-    u64 ph2 = svcGetSystemTick();
-    u8* ov = gx_render_alloc_dynamic(tris * vper * vsize);
-    u16* oi = ov ? gx_render_alloc_dynamic(tris * tper * 3 * sizeof(u16)) : NULL;
-    u64 ph3 = svcGetSystemTick();
-    if (!ov || !oi) return true;
     // Fallback waves: four grid steps per wave, never shorter than S3D_WATER_WAVE_MIN
     float len = 4.0f * max_len / n, min_len = s_wt_wave > 0 ? (float)s_wt_wave : 20.0f;
     WaterOfs wo;
@@ -1561,6 +1606,60 @@ static bool water_tessellate(bool packed, const void** verts, const u16** indice
     // wave mode); the caustic ripple cannot, so it keeps the per-vertex CPU
     // offsets in the colour
     bool vsh_waves = !wo.ripple;
+    u64 ph2 = svcGetSystemTick();
+    // The tessellation cache: the grid is a pure function of the source
+    // buffers, the level and the water settings, so a hit replays the stored
+    // grid instead of regenerating it (the render thread's biggest single
+    // cost at the pond: ~20 ms a frame)
+    u32 ni_out = tris * tper * 3;
+    if (owner) {
+        u32 gen = cfg_gen();
+        for (int i = 0; i < WT_CACHE_MAX; i++) {
+            WtEntry* w = &s_wt_cache[i];
+            if (w->owner == owner && w->verts == *verts && w->indices == idx && w->tris == tris &&
+                w->packed == packed && w->n == n && w->gen == gen) {
+                s_wt_tris += w->count / 3;
+                if (vsh_waves) {
+                    upload_water_waves(wo.wave_len);
+                    upload_water_amp();
+                } else {
+                    upload_water_decode(wo.amp4);
+                }
+                *verts = w->ov;
+                *indices = w->oi;
+                *count = w->count;
+                PROF_COUNT("gx.water_tess_hits", 1);
+                return true;
+            }
+        }
+    }
+    u8* ov = NULL;
+    u16* oi = NULL;
+    bool cached = false;
+    if (owner) {
+        u32 need = tris * vper * vsize + ni_out * 2 + 7;
+        if (!s_wt_pool) {
+            s_wt_pool = linearAlloc(WT_POOL_BYTES);
+            if (s_wt_pool) {
+                s_wt_pool_used = 0;
+                memset(s_wt_cache, 0, sizeof(s_wt_cache));
+            }
+        }
+        if (s_wt_pool && s_wt_pool_used + need <= WT_POOL_BYTES) {
+            ov = (u8*)((uintptr_t)(s_wt_pool + s_wt_pool_used + 7) & ~(uintptr_t)7);
+            oi = (u16*)(ov + tris * vper * vsize);
+            s_wt_pool_used += need;
+            cached = true;
+        } else {
+            s_wt_reset_next = true;  // Reset at the next frame begin, when the GPU is done
+        }
+    }
+    if (!ov) {
+        ov = gx_render_alloc_dynamic(tris * vper * vsize);
+        oi = ov ? gx_render_alloc_dynamic(ni_out * 2) : NULL;
+    }
+    u64 ph3 = svcGetSystemTick();
+    if (!ov || !oi) return true;
     u32 nv = 0, ni = 0;
     float inv = 1.0f / (float)n;
     u64 ph4 = svcGetSystemTick();
@@ -1618,6 +1717,30 @@ static bool water_tessellate(bool packed, const void** verts, const u16** indice
     s_wt_ph[1] += ph3 - ph2;
     s_wt_ph[2] += ph5 - ph4;
     s_wt_ph[3] += ph4 - ph3;
+    if (cached) {
+        // Store the grid: any free slot (the pool reset clears them all)
+        WtEntry* w = NULL;
+        for (int i = 0; i < WT_CACHE_MAX; i++) {
+            if (!s_wt_cache[i].owner) {
+                w = &s_wt_cache[i];
+                break;
+            }
+        }
+        if (w) {
+            w->owner = owner;
+            w->verts = *verts;
+            w->indices = idx;
+            w->tris = tris;
+            w->packed = packed;
+            w->n = n;
+            w->gen = cfg_gen();
+            w->count = ni;
+            w->ov = ov;
+            w->oi = oi;
+        } else {
+            s_wt_reset_next = true;
+        }
+    }
     // Wave mode: the shader multiplies the waves it computes by texsrc[0].w
     // (the amplitude) itself; decode mode carries the offsets in the colour
     if (vsh_waves) {
@@ -1651,7 +1774,7 @@ void gx_render_flush(void) {
     const void* verts = &s_vbuf[s_batch_vstart];
     const u16* indices = &s_ibuf[s_batch_istart];
     u32 count = icount;
-    bool tess = water_tessellate(false, &verts, &indices, &count, 1.0f, 1.0f);
+    bool tess = water_tessellate(false, NULL, &verts, &indices, &count, 1.0f, 1.0f);
     set_vsrc(VS_STD, verts, NULL);
     draw_triangles(count, indices);
     if (tess) water_tess_restore();
@@ -1717,7 +1840,7 @@ void gx_render_drawc_report(int frames) {
         }                                                                       \
     } while (0)
 
-void gx_render_draw_cached(const GxOutVertex* verts, const u16* indices, u32 index_count) {
+void gx_render_draw_cached(const void* owner, const GxOutVertex* verts, const u16* indices, u32 index_count) {
     DRAWC_BEGIN();
     gx_render_flush();  // Keep draw order with pending decoded geometry
     DRAWC_STEP(dc_t1);
@@ -1726,7 +1849,7 @@ void gx_render_draw_cached(const GxOutVertex* verts, const u16* indices, u32 ind
     use_layout(LAYOUT_STD, 1.0f, 1.0f);
     DRAWC_STEP(dc_t2b);
     const void* v = verts;
-    bool tess = water_tessellate(false, &v, &indices, &index_count, 1.0f, 1.0f);
+    bool tess = water_tessellate(false, owner, &v, &indices, &index_count, 1.0f, 1.0f);
     DRAWC_STEP(dc_t2c);
     set_vsrc(VS_STD, v, NULL);
     DRAWC_STEP(dc_t3);
@@ -1781,8 +1904,8 @@ static void use_layout(int layout, float pos_scale, float tc_scale) {
 
 // Cached list stored in the packed layout (gx_dlcache.c pack_vertices):
 // fixed-point positions and texcoords, scaled back in the shader
-void gx_render_draw_cached_packed(const GxPackedVertex* verts, const u16* indices, u32 index_count, float pos_scale,
-                                  float tc_scale) {
+void gx_render_draw_cached_packed(const void* owner, const GxPackedVertex* verts, const u16* indices, u32 index_count,
+                                  float pos_scale, float tc_scale) {
     DRAWC_BEGIN();
     gx_render_flush();
     DRAWC_STEP(dc_t1);
@@ -1791,7 +1914,7 @@ void gx_render_draw_cached_packed(const GxPackedVertex* verts, const u16* indice
     use_layout(LAYOUT_PACKED, pos_scale, tc_scale);
     DRAWC_STEP(dc_t2b);
     const void* v = verts;
-    bool tess = water_tessellate(true, &v, &indices, &index_count, pos_scale, tc_scale);
+    bool tess = water_tessellate(true, owner, &v, &indices, &index_count, pos_scale, tc_scale);
     DRAWC_STEP(dc_t2c);
     set_vsrc(VS_PACKED, v, NULL);
     DRAWC_STEP(dc_t3);

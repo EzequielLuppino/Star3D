@@ -477,8 +477,8 @@ bool gx_frame_is_active(void);
 const GxUnitMap* gx_render_prepare(void);  // Applies dirty state, returns unit map
 const GxUnitMap* gx_render_unit_map(void);  // The unit map as is (no state applied)
 u32 gx_render_census_key(void);  // Material key of the last state census (S3D_STATE_CENSUS)
-void gx_render_draw_cached(const GxOutVertex* verts, const u16* indices, u32 index_count);
-void gx_render_draw_cached_packed(const GxPackedVertex* verts, const u16* indices, u32 index_count, float pos_scale,
+void gx_render_draw_cached(const void* owner, const GxOutVertex* verts, const u16* indices, u32 index_count);
+void gx_render_draw_cached_packed(const void* owner, const GxPackedVertex* verts, const u16* indices, u32 index_count, float pos_scale,
                                   float tc_scale);
 void gx_render_draw_cached_dynamic(const GxOutVertex* verts, const GxDynVertex* dyn, const u16* indices,
                                    u32 index_count);
@@ -581,6 +581,7 @@ void gx_dlcache_frame_end(void);  // Flushes per-entry dynamic buffers
 void gx_dlcache_prof_frame(void); // gx_rec.c: render-thread frame window for S3D_DLCALL_PROFILE
 void gx_render_drawc_prof_on(void);   // gx_render.c: enable the draw-cached cost split
 void gx_render_drawc_report(int frames);  // ... and report one window ("drawc" lines)
+void gx_water_tess_invalidate(const void* owner);  // ... drop cached water tessellations of a DL entry
 GxOutVertex* gx_dlrec_alloc(DlRecorder* rec, u32 count, u32 index_count, u16** indices_out, u16* base_out,
                             const GxGatherRun* run, u16** pos_idx_out, u16** nrm_idx_out);
 void gx_dlrec_command(DlRecorder* rec, u32 offset, bool splits_draws);

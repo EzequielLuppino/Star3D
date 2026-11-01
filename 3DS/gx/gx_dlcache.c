@@ -373,6 +373,7 @@ void gx_dlrec_array(DlRecorder* rec, int attr) {
 // pipelining that can be the previous frame too, so the fence decides
 // (gx_gpu_free_linear, gx_init.c)
 static void free_entry(DlEntry* e) {
+    gx_water_tess_invalidate(e);  // Its cached tessellations key on this entry
     if (e->mem) gx_gpu_free_linear(e->mem, e->last_used);
     if (e == s_dlb.e) {  // Not expected: held entries were used this frame
         PROF_COUNT("dlb.dropped", 1);
@@ -1168,10 +1169,10 @@ static bool play_entry(const DlEntry* e) {
                                               seg->icount);
             } else {
                 if (e->pverts)
-                    gx_render_draw_cached_packed(&e->pverts[seg->vstart], &e->indices[seg->istart], seg->icount,
+                    gx_render_draw_cached_packed(e, &e->pverts[seg->vstart], &e->indices[seg->istart], seg->icount,
                                                  e->pack_pos_scale, e->pack_tc_scale);
                 else
-                    gx_render_draw_cached(&e->verts[seg->vstart], &e->indices[seg->istart], seg->icount);
+                    gx_render_draw_cached(e, &e->verts[seg->vstart], &e->indices[seg->istart], seg->icount);
             }
         } else {
             GX_PROF_ZONE("gx.dl.listcmd");
@@ -1342,10 +1343,10 @@ void gx_dlbatch_flush(void) {
             g_gx.posmtx_rows |= touched;
             g_gx.dirty |= GX_DIRTY_POSMTX;
             if (e->pverts)
-                gx_render_draw_cached_packed((const GxPackedVertex*)e->bt_mem, e->bt_idx, m * ic, e->pack_pos_scale,
-                                             e->pack_tc_scale);
+                gx_render_draw_cached_packed(e, (const GxPackedVertex*)e->bt_mem, e->bt_idx, m * ic,
+                                             e->pack_pos_scale, e->pack_tc_scale);
             else
-                gx_render_draw_cached((const GxOutVertex*)e->bt_mem, e->bt_idx, m * ic);
+                gx_render_draw_cached(e, (const GxOutVertex*)e->bt_mem, e->bt_idx, m * ic);
             draws++;
         }
         PROF_COUNT("dlb.batches", 1);
