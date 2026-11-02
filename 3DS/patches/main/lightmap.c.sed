@@ -32,3 +32,17 @@ s|^    } while (layer >= 0);$|&\
 1i\
 void mapDedupBegin(int renderType);\
 void mapDedupEnd(void);
+# Shadow decals (gx_init.c port_shadow_decals): queue one flat ground-shadow
+# quad per shadowed object instead of the caster RTT passes (renderShadows
+# then sees no casters: no object redraws, no copies, no receiver redraws).
+# Only objects that passed the distance cuts and the grass quality reach this
+# loop, so the decals follow the LOD settings.
+1i\
+_Bool port_shadow_decals(void);
+s|^                    if (t == 2 \|\| t == 1) {$|                    if (port_shadow_decals()) {\
+                        if (t == 2 \|\| t == 1 \|\| t == 4) {\
+                            renderShadowType3(o, 7, 0);\
+                            gLightmapDrawQueue[gLightmapDrawQueueCount].d = 2;\
+                            gLightmapDrawQueueCount++;\
+                        }\
+                    } else if (t == 2 \|\| t == 1) {|

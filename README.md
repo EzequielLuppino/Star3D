@@ -279,7 +279,13 @@ goes with them). The grass blade passes of the
 original game have no visual impact on the 3DS and are always skipped
 (`S3D_GRASS_BUDGET` default 0; env.txt can still set it). "Object distance"
 (`S3D_LOD`, independent of Grass quality) is High (the game's full draw
-ranges), Mid (half) or Low (30%): farther objects are not drawn.
+ranges), Mid (half) or Low (30%): farther objects are not drawn. Shadows
+(`S3D_SHADOWS`) draw as flat terrain-hugging decals by default
+(`S3D_SHADOW_DECALS=1`): one cheap quad per object instead of the projected
+shadow meshes and the per-caster render-to-texture passes, and they follow
+the LOD settings (only rendered objects cast them, fading with their
+renderAlpha). `S3D_SHADOW_DECALS=0` restores the GameCube's projected
+shadows.
 
 The renderer and debug options are hidden and keep their defaults: render
 thread on core 2, state deltas on, far animation LOD strong, back-face culling

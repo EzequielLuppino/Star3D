@@ -1911,6 +1911,21 @@ bool port_shadows_enabled(void) {
     return on;
 }
 
+// Shadow decals (S3D_SHADOW_DECALS, default 1): with shadows on, every
+// shadowed object draws one flat ground quad (the game's own
+// objDrawGroundShadow: a terrain-conforming decal, rebuilt each frame so
+// moving objects keep it on the ground) instead of the projected shadow
+// meshes and the caster render-to-texture passes (patches/main/lightmap.c.sed
+// and lightmap_draw.c.sed). The decals follow the LOD settings: only objects
+// that passed the distance cuts (S3D_OBJ_DIST / S3D_LOD) and the grass
+// quality reach the shadow queue, and the game's own distance fade multiplies
+// the object's renderAlpha. 0 restores the game's shadows.
+bool port_shadow_decals(void) {
+    static int on = -1;
+    CFG_LIVE(on, cfg_int("S3D_SHADOW_DECALS", 1));
+    return on;
+}
+
 // Shadow levers (MULTICORE_PLAN.md "Shadow levers"; hooks in
 // patches/main/newshadows.c.sed renderShadows). Shadows cost ~7-8 ms of GPU
 // time in the hub (5A5EC2CB A/B). The casters' render-to-texture passes (a
