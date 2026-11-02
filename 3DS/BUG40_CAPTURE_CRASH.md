@@ -113,6 +113,35 @@ passes are instant, so any remaining fault should show a different shape.
 - `3DS/gx/gx_render.c` - `dump_tex_raw` writes through `capmem:`
 - `3DS/OPEN_BUGS.md` - row 40
 
+## Round 2 (HW, 2026-11-02): the writer wedged
+
+The first writer build no longer crashed the console, but the mark still
+froze the game ("takes ages") and the captures only ever got a partial
+`color.bmp` (262144 = 256 KB exactly, both runs). The log showed the game
+stuck at the capture frame for minutes while the log writer kept working.
+
+- The writer wedged mid-file (8 fs writes in, then nothing) and the render
+  thread blocked forever on the queue backpressure - so a slow/hung write
+  still froze the game.
+- Suspects, both fixed: (1) the writer's 32 KB stdio-buffered writes (the old
+  inline capture always wrote ~1 KB chunks); (2) the writer's fopen racing
+  the freshly-created capture folder (the old code did mkdir + fopen + write
+  + close sequentially on one thread).
+- Also fixed: logging from the writer / under the memfile lock could route
+  through the states.txt tee back into capmem and self-deadlock (no LOG calls
+  on that path anymore - drops are counted and logged from the frame side).
+
+Round 2 changes:
+- writer: default stdio buffering (~1 KB fs writes), the capture folder is
+  created on the writer right before the first fopen,
+- non-blocking memfile chunking: the states.txt tee never waits for the SD;
+  a full queue keeps the bytes in memory (2 MB cap, then the file loses its
+  tail),
+- drop-timeout: a file that cannot be staged in ~10 s is dropped (counted,
+  logged once at the end of the capture) instead of stalling the game,
+- volume cut: EFB copy PPMs now need S3D_CAP_COPIES=1, per-state tex dumps
+  need S3D_CAP_TEXDUMP (default 0, was 7).
+
 ## Repro / test
 
 1. `make -C 3DS code` (or `./build.sh code`), push `star3d-nodata.3dsx` as

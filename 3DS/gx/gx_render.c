@@ -3950,9 +3950,11 @@ const GxUnitMap* gx_render_prepare(void) {
             // What the GPU samples: PICA format, mip levels, bias, address
             const C3D_Tex* ct = __C3D_Context.tex[u];
             // S3D_CAP_TEXDUMP=N: the capture also saves the textures of every
-            // state with at least N GX stages (default 7: character eyes)
+            // state with at least N GX stages. Off by default (each dump is a
+            // slow SD commit on hardware, bug 40); set 7 to catch the
+            // character-eye states again
             static int cap_texdump = -1;
-            if (cap_texdump < 0) cap_texdump = cfg_int("S3D_CAP_TEXDUMP", 7);
+            if (cap_texdump < 0) cap_texdump = cfg_int("S3D_CAP_TEXDUMP", 0);
             if (ct && s_cap_dump && cap_texdump > 0 && atoi(buf) >= cap_texdump) dump_tex_raw(ct, s_state_index, u);
             if (ct) {
                 u32 pa = osConvertVirtToPhys(ct->data);
