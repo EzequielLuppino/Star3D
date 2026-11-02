@@ -44,9 +44,21 @@ static CensusObj* census_find(const void* obj) {
 // Plants: DLL 685 (SoftBody: grass clumps, flowers, bulrushes) and 687 (fern
 // trees). The hub has ~180 of them. All plants of a kind sway with one shared
 // animation phase (685.c), yet each one is skinned on its own every frame.
-// S3D_PLANTS: 1 normal (default), 0 hidden, 2 frozen (skinned once, then the
-// first pose is kept: measures what re-skinning costs)
-static int s_plants = 1;
+// S3D_GRASS_QUALITY (Settings > Grass quality): High (2, default) keeps every
+// plant; Low (1) keeps the fern trees (DLL 687) but hides the grass and
+// flowers (DLL 685); Off (0) hides all plants. S3D_PLANTS layers on top:
+// 0 hides everything (the 3D cut profile and the S3D_PLANTS_AB tests),
+// 2 freezes what is left (skinned once, then the first pose is kept:
+// measures what re-skinning costs). Hidden wins over frozen.
+// Returns 0 hidden, 1 normal, 2 frozen.
+static int plants_mode(int dll_id) {
+    static int quality = -1, plants = -1;
+    CFG_LIVE(quality, cfg_int("S3D_GRASS_QUALITY", 2));
+    CFG_LIVE(plants, cfg_int("S3D_PLANTS", 1));
+    if (plants == 0 || quality == 0 || (quality == 1 && dll_id == 685)) return 0;
+    if (plants == 2) return 2;
+    return 1;
+}
 static unsigned s_lod_frame;
 
 static inline bool is_plant(int dll_id) { return dll_id == 685 || dll_id == 687; }
@@ -81,8 +93,7 @@ static float dist_lookup(const void* obj) {
 }
 
 float port_obj_range(const void* obj, const char* name, int def_id, int class_id, int dll_id, float range, float d) {
-    CFG_LIVE(s_plants, cfg_int("S3D_PLANTS", 1));
-    if (s_plants == 0 && is_plant(dll_id)) {
+    if (is_plant(dll_id) && plants_mode(dll_id) == 0) {
         PROF_COUNT("plant.hidden", 1);
         return 0.0f;
     }
@@ -250,12 +261,11 @@ void port_model_path(int dll_id, int alt) {
 }
 
 int port_skin_skip(const void* obj, int dll_id, const void* am) {
-    CFG_LIVE(s_plants, cfg_int("S3D_PLANTS", 1));
     static int mode = -1, near_d = -1, far_d = -1;
     CFG_LIVE(mode, cfg_int("S3D_ANIM_LOD", 2));
     CFG_LIVE(near_d, cfg_int("S3D_ANIM_LOD_NEAR", 400));
     CFG_LIVE(far_d, cfg_int("S3D_ANIM_LOD_FAR", 900));
-    bool frozen = s_plants == 2 && is_plant(dll_id);
+    bool frozen = is_plant(dll_id) && plants_mode(dll_id) == 2;
     if (!frozen && mode <= 0) {
         PROF_COUNT("anim.skinned", 1);
         return 0;
@@ -309,7 +319,8 @@ static bool has_fur(const void* obj) {
 // Their world transform is inside the matrices, so this only happens while
 // the object stands still (world matrix unchanged). The call site leaves out
 // objects with a bone callback or root motion; objects with fur are left out
-// here. Returns 1 to skip ObjModel_UpdateAnimMatrices
+// here. Returns 1 to skip ObjModel_UpdateAnimMatrices. Frozen plants
+// (S3D_PLANTS=2) keep the pose their first update built, forever.
 #define POSE_SLOTS 1024
 static struct {
     const void* am;
@@ -318,15 +329,20 @@ static struct {
 } s_pose[POSE_SLOTS];
 
 int port_anim_skip(const void* obj, int dll_id, const void* am, const float* wm) {
-    (void)dll_id;
     static int mode = -1, near_d = -1, far_d = -1;
     CFG_LIVE(mode, cfg_int("S3D_ANIM_LOD", 2));
     CFG_LIVE(near_d, cfg_int("S3D_ANIM_LOD_NEAR", 400));
     CFG_LIVE(far_d, cfg_int("S3D_ANIM_LOD_FAR", 900));
-    if (mode <= 0 || has_fur(obj)) return 0;
+    // Frozen plants (S3D_PLANTS=2, plants_mode() 2): they are rigid jointed
+    // models, so their sway is ObjModel_UpdateAnimMatrices. Build the
+    // matrices once and keep the pose (plants stand still, so wm never
+    // changes); independent of the S3D_ANIM_LOD mode below
+    bool frozen = is_plant(dll_id) && plants_mode(dll_id) == 2;
+    if ((mode <= 0 || has_fur(obj)) && !frozen) return 0;
     float d = dist_lookup(obj);
     unsigned interval = d >= (float)far_d ? 4 : d >= (float)near_d ? 2 : 1;
     if (mode >= 2) interval *= 2;
+    if (frozen) interval = 1u << 30;
     if (interval == 1) return 0;
     u32 h = ((uintptr_t)am >> 4) % POSE_SLOTS;
     int slot = -1;

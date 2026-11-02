@@ -55,7 +55,10 @@ typedef struct {
 int port_cheat_ohk;  // patches/dlls/objects/202/*.c.sed
 static int cheat_health, cheat_magic, cheat_money, cheat_giant, cheat_tiny, cheat_moonjump;
 
-static const int grass_choices[] = { 0, 2, 4, 8, 16, INT32_MIN };
+// S3D_GRASS_QUALITY: High = trees and grass, Low = trees only (no grass or
+// flowers), Off = no plants
+static const int grass_quality_choices[] = { 2, 1, 0, INT32_MIN };
+static const char* const grass_quality_names[] = { "Off", "Low", "High" };
 static const int fur_choices[] = { 1, 2, 0, INT32_MIN };
 static const char* const fur_names[] = { "Off", "Cutscene", "Always" };
 static const int anim_lod_choices[] = { 1, 2, 0, INT32_MIN };
@@ -128,7 +131,7 @@ static const Row settings_rows[] = {
     { "Fur wind", ROW_BOOL, "S3D_FUR_WIND", 1, .advanced = true },
     { "Fur layer budget", ROW_BOOL, "S3D_FUR_BUDGET", 1, .advanced = true },
     { "Fur", ROW_CHOICE, "S3D_FUR_MODE", 1, fur_choices, fur_names },
-    { "Grass layers", ROW_CHOICE, "S3D_GRASS_BUDGET", 8, grass_choices },
+    { "Grass quality", ROW_CHOICE, "S3D_GRASS_QUALITY", 2, grass_quality_choices, grass_quality_names },
     { "Water ripples", ROW_BOOL, "S3D_WATER_WARP", 1, .advanced = true },
     { "Caustics", ROW_BOOL, "S3D_CAUSTIC_WARP", 1, .advanced = true },
     { "Heat haze", ROW_BOOL, "S3D_SCREEN_WARP", 1, .advanced = true },
@@ -358,10 +361,11 @@ void touchui_load_settings(void) {
             if (!s_menu_advanced && is_advanced_key(line)) continue;
             // Removed from the menu, so a value saved by an older build must not
             // come back: reduced resolution (freezes the top screen, then
-            // crashes) and the GPU overlap toggles (bug 19 followed turning
-            // overlap off). env.txt can still set them
+            // crashes), the GPU overlap toggles (bug 19 followed turning
+            // overlap off) and grass layers (no visual impact on the 3DS, off
+            // by default now). env.txt can still set them
             if (!strcmp(line, "S3D_LOWRES") || !strcmp(line, "S3D_GPU_PIPELINE") ||
-                !strcmp(line, "S3D_GPU_SPLIT_FULLFLUSH"))
+                !strcmp(line, "S3D_GPU_SPLIT_FULLFLUSH") || !strcmp(line, "S3D_GRASS_BUDGET"))
                 continue;
             if (!strcmp(line, "S3D_FUR_GAMEPLAY")) {    // Old "Fur always on", now Fur: Always
                 if (atoi(eq + 1)) setenv("S3D_FUR_MODE", "2", 0);

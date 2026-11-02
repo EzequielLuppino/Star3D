@@ -87,12 +87,17 @@ unsigned char port_fur_shade(int layer) {
 // block again for every layer (4, 8 or 16 passes, each raised a little and
 // masked by its own noise texture) in mapBlockRender_drawLightmapIndirectPasses.
 // The patched loop walks the passes with this step, ending on the top one so
-// the blades keep their full height (gx.prof counter grass.passes). At most S3D_GRASS_BUDGET passes (default
-// 8) are drawn, half that in "3D: reduced" stereo. 0 draws no grass passes (only the ground under them).
+// the blades keep their full height (gx.prof counter grass.passes). The
+// passes have no visual impact on the 3DS (tiny at 240p), so the default
+// budget is 0: no grass passes are drawn, only the ground under them. The
+// row was removed from the touch menu; env.txt can still set S3D_GRASS_BUDGET
+// to 8 to bring them back. S3D_GRASS_QUALITY=0 (Settings > Grass quality:
+// Off) skips them even then.
 int port_grass_step(int passCount) {
-    static int budget = -1;
-    CFG_LIVE(budget, cfg_int("S3D_GRASS_BUDGET", 8));
-    if (budget < 1) return passCount + 1;  // the loop starts past the last pass
+    static int budget = -1, quality = -1;
+    CFG_LIVE(budget, cfg_int("S3D_GRASS_BUDGET", 0));
+    CFG_LIVE(quality, cfg_int("S3D_GRASS_QUALITY", 2));
+    if (quality == 0 || budget < 1) return passCount + 1;  // the loop starts past the last pass
     int b = budget;
     if (port_stereo_reduced() && b > 1) b /= 2;
     int step = (passCount + b - 1) / b;

@@ -31,7 +31,9 @@ static const ProfileKey s_profile[] = {
     { "S3D_PLANTS", 0, 1 },
     { "S3D_SHADOWS", 0, 1 },
     { "S3D_FUR_MODE", 0, 1 },
-    { "S3D_GRASS_BUDGET", 0, 8 },
+    // Grass passes are off by default (no visual impact); env.txt may raise
+    // S3D_GRASS_BUDGET, which the 3D profile then still cuts
+    { "S3D_GRASS_BUDGET", 0, 0 },
     { "S3D_GPU_BLUR", 0, 1 },
     // The water keeps the ripple path (the same one 2D uses, with the
     // tessellation cache amortizing its CPU cost): the wave-only mode
