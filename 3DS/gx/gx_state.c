@@ -14,8 +14,6 @@
 #include "profiler.h"
 
 GxState g_gx;
-bool g_map_loaded;
-bool g_map_loaded;
 u32 g_gx_change_seq;
 
 #if GX_PROFILE_DETAIL

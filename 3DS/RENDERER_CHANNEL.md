@@ -169,27 +169,3 @@ addLightTexReg2Stage) and the per-object state (the matrices, the
 animation, the lights). The material then builds once per render-op and
 the port caches it. That is the next fork slice - a multi-session
 rewrite of objSetupRenderOpGxState with the GX fallback intact.
-
-## The fork's first slice: the material recorder (2026-11-01)
-
-The stage builders (addSphereMapTexStage, addEnvMapBumpStages,
-addLightTexReg2Stage, the addTexLayerStages* family in shader_dolphin.c)
-are pure functions of their parameters and the game's own RCP stage
-state (gRcpNextTevStage / gRcpNextTexCoord / gRcpNextTexMap /
-gRcpNumTevStages / gRcpNumTexGens / gRcpNextPostTexMtx /
-gRcpNumIndStages - the game's stage counters). The setup is a chain of
-these builders driven by the render-op data and the bit stream.
-
-The recorder: the builders gain a recording form - instead of emitting
-GX calls they append (builder id, parameters) to a material blob. The
-first frame's setup runs in the record mode and the port captures the
-resulting GX state (the delta shadow) plus the game's gRcp* end state
-and the bit-stream advance. The later frames skip the setup: the port
-re-applies the state through the shadow, and the game re-sets the gRcp*
-counters and the bit-stream position from the stored values. The
-per-object parts (matrices, arrays, lights) stay on the per-frame path.
-
-Slice order: 1) the recorder mode + the blob, 2) the three sphere/env/
-light builders, 3) the remaining builder family, 4) the setup's call
-site switch, 5) Azahar correctness per slice, 6) the PERF_WRAP
-measurement. The GX fallback stays until every slice proves out.

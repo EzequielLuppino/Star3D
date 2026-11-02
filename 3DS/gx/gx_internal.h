@@ -224,7 +224,6 @@ typedef struct {
 } GxState;
 
 extern GxState g_gx;
-extern bool g_map_loaded;  // Set by the map loader (gx_init.c); gates the material cache
 
 // EFB x -> top screen x (pixels of the 400x240 screen): the 4:3 image is
 // pillarboxed (40 + x/2); in the game's 16:9 mode it fills the screen
@@ -277,10 +276,6 @@ void gxrec_delta_apply(const u32* p, u32 words);
 // clears the pending state; returns the word counts. Single-threaded: the
 // buffer stays valid until the next take or flush.
 const u32* gxrec_delta_take(u32* mwords, u32* dwords);
-// The material recorder (RENDERER_CHANNEL.md): snapshot/restore the shadow's
-// material regions (the game-side fork stores the material per render-op)
-void gxrec_delta_snapshot(GxState* out);
-void gxrec_delta_restore(const GxState* in);
 void gxrec_delta_mblk_apply(const u32* p, u32 words);
 void gxrec_delta_refresh(void);
 void gxrec_delta_frame_begin(void);

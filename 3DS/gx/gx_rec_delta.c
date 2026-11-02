@@ -99,23 +99,8 @@ typedef struct {
 #define RDREG(field) { (u16)offsetof(GxState, field), (u16)sizeof(((GxState*)0)->field) }
 #define RDREGS(field, size) { (u16)offsetof(GxState, field), (u16)(size) }
 
-// The material regions for the material cache (RENDERER_CHANNEL.md): the
-// TEV/texture/texgen/light/channel/pixel state the setup builds. The
-// vertex descriptors, formats, arrays, projections, viewport, scissor and
-// clears are per-object or per-frame state and stay on their own paths (the
-// render side loads some of them from the display lists - restoring them
-// from the cache would overwrite those).
-static const u64 s_mat_mask = (1ull << RD_NUM_TEXGENS) | (1ull << RD_NUM_CHANS) | (1ull << RD_CHAN) |
-                              (1ull << RD_CHAN_MAT) | (1ull << RD_CHAN_AMB) | (1ull << RD_PIXEL) |
-                              (1ull << RD_TEX_OFFSET_EN) |
-                              (1ull << RD_TEXCOPY) | (1ull << RD_TEV_STAGES) | (1ull << RD_TEV_REGS) |
-                              (1ull << RD_TEV_KCOLORS) | (1ull << RD_TEV_SWAP) | (1ull << RD_TEV_NUM) |
-                              (1ull << RD_TEV_WARP) | (1ull << RD_TEV_IND) | (1ull << RD_TEV_IND_MAP) |
-                              (1ull << RD_TEV_RIPPLE) | (1ull << RD_TEV_NUM_IND) | (1ull << RD_TEX0) |
-                              (1ull << RD_TEX1) | (1ull << RD_TEX2) | (1ull << RD_TEX3) | (1ull << RD_TEX4) |
-                              (1ull << RD_TEX5) | (1ull << RD_TEX6) | (1ull << RD_TEX7);
-
-static const DeltaRegion s_region_table[RD_COUNT] = {    [RD_VTX_DESC] = RDREG(vtx_desc),
+static const DeltaRegion s_region_table[RD_COUNT] = {
+    [RD_VTX_DESC] = RDREG(vtx_desc),
     [RD_VTX_FMT] = RDREG(vtx_fmt),
     [RD_ARRAY0] = RDREGS(arrays[0], 8 * sizeof(((GxState*)0)->arrays[0])),
     [RD_ARRAY1] = RDREGS(arrays[8], 8 * sizeof(((GxState*)0)->arrays[0])),
@@ -322,43 +307,6 @@ void gxrec_delta_flush(void) {
         GX_PROF_COUNT("rec.delta_flushed", 1);
     }
     s_flushing = false;
-}
-
-// The material recorder (RENDERER_CHANNEL.md, the fork): the store snapshots
-// the shadow's material regions into a caller-owned buffer (a GxState-sized
-// copy), the restore re-feeds them - both the shadow (so the next delta flush
-// ships the state to the render thread) and the game-side g_gx (so the game
-// thread's own state matches). The position matrices are not in the shadow
-// (the MBLOCK carries them), so the stored material never touches them.
-void gxrec_delta_snapshot(GxState* out) {
-    for (int i = 0; i < RD_COUNT; i++) {
-        if (!(s_mat_mask & (1ull << i))) continue;
-        u32 size = s_region_table[i].size;
-        // The fog fields (the tail of the pixel state) are per-frame - the
-        // material snapshot must not capture them
-        if (i == RD_PIXEL) size = (u32)offsetof(GxPixelState, fog_type);
-        memcpy((u8*)out + s_region_table[i].off, (const u8*)&s_shadow + s_region_table[i].off, size);
-    }
-}
-
-void gxrec_delta_restore(const GxState* in) {
-    for (int i = 0; i < RD_COUNT; i++) {
-        if (!(s_mat_mask & (1ull << i))) continue;
-        u32 size = s_region_table[i].size;
-        // The fog stays per-frame: the restore skips the pixel state's fog
-        // fields (they are the tail of the region)
-        if (i == RD_PIXEL) size = (u32)offsetof(GxPixelState, fog_type);
-        // The diff: consecutive draws of the same material leave the state
-        // unchanged - the unchanged regions cost only the memcmp, and only
-        // the changed ones are marked for the flush (the full-region mark
-        // shipped the whole material per hit and slowed the pipeline)
-        if (memcmp((const u8*)in + s_region_table[i].off, (const u8*)&s_shadow + s_region_table[i].off, size) == 0)
-            continue;
-        memcpy((u8*)&s_shadow + s_region_table[i].off, (const u8*)in + s_region_table[i].off, size);
-        memcpy((u8*)&g_gx + s_region_table[i].off, (const u8*)in + s_region_table[i].off, size);
-        s_regions |= 1ull << i;
-    }
-    s_dirty = 0xFFFFFFFFu;
 }
 
 // The model-draw seam (gx_rec.c port_model_draw): instead of emitting
