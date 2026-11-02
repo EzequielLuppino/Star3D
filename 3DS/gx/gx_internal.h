@@ -473,6 +473,7 @@ void gx_copy_frame_begin(void);
 void gx_etc1_texel(const u8* blk, u32 x, u32 y, u8 rgb[3]);  // One texel of a PICA ETC1 block
 void gx_copy_dump_all(void);  // Debug: write every copy texture to sdmc:/3ds/star3d/copyN.ppm
 void gx_copy_dump_dir(const char* dir);  // Same, into dir
+void gx_copy_dump_capture(void);  // Same, staged in memory for the capture writer (gx_capture.c)
 void gx_copy_frame_end(void);  // Queues the depth readback for GXPeekZ
 void gx_render_clear_efb_rect(u32 left, u32 top, u32 wd, u32 ht);  // GX copy clear
 bool gx_render_has_drawn(void);   // Draws issued since the last clear_drawn

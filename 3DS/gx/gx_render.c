@@ -883,8 +883,10 @@ static void draw_triangles(u32 count, const void* indices) {    if (s_discard) {
 static void dump_tex_raw(const C3D_Tex* t, u32 state, int unit) {
     static const u8 bits[14] = { 32, 24, 16, 16, 16, 16, 16, 8, 8, 8, 4, 4, 4, 8 };  // GPU_RGBA8 .. GPU_ETC1A4
     if (!t->data || (unsigned)t->fmt >= 14) return;
+    // capmem: the bytes are buffered in memory and the capture writer (gx_capture.c)
+    // writes the file - the render thread never touches the SD (bug 40)
     char path[160];
-    snprintf(path, sizeof(path), "%s/tex_s%lu_u%d.bin", gx_capture_dir(), (unsigned long)state, unit);
+    snprintf(path, sizeof(path), "capmem:/tex_s%lu_u%d.bin", (unsigned long)state, unit);
     FILE* f = fopen(path, "wb");
     if (!f) return;
     u16 hdr[3] = { (u16)t->width, (u16)t->height, (u16)t->fmt };

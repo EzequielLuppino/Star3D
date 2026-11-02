@@ -1,11 +1,22 @@
 // Render capture: see gx_capture.h. Runs at frame begin, where C3D_FrameBegin
 // has waited for the GPU, so the previous frame's color and depth buffers are
 // complete and not cleared yet.
+//
+// All capture files are written by a low-priority writer thread: the render
+// thread only copies pixels and stages whole-file buffers (the "capmem:"
+// in-memory files), so a mark never stalls the frame for the SD card. Bug 40:
+// the capture used to write everything inline on the render thread (per-line
+// state dumps, per-state texture dumps, BMPs, copy PPMs) while the game
+// streamed romfs.bin and the log writer flushed; the SD card's commits stall
+// for seconds each, the frame froze for up to 85 s, and the kernel took a
+// deterministic prefetch abort while the fs module was current (9 identical
+// dumps). See BUG40_CAPTURE_CRASH.md.
 #include "gx_capture.h"
 #include <3ds.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/iosupport.h>
 #include <sys/stat.h>
 #include <time.h>
 #include "gx_internal.h"
@@ -21,6 +32,288 @@ static FILE* s_states;
 void gx_capture_request(void) { s_requested = true; }
 const char* gx_capture_dir(void) { return s_dir; }
 
+// --- Capture writer thread -----------------------------------------------------
+// One low-priority thread owns the SD for the capture: jobs are whole files
+// (name + heap buffer), taken in order. The render thread blocks only while
+// more than CAP_QUEUE_BYTES are staged (the SD card is slow, but a bounded
+// stall is better than the old unbounded one, and in practice the queue
+// stays well below the bound).
+
+#define CAP_QUEUE_BYTES (2 * 1024 * 1024)
+#define CAP_JOB_MAX 64
+#define CAP_JOB_NAME 96
+
+typedef struct {
+    char name[CAP_JOB_NAME];
+    u8* data;
+    u32 size;
+    bool append;  // A later chunk of a chunked file: open in "ab"
+} CapJob;
+
+static CapJob s_job[CAP_JOB_MAX];
+static u32 s_job_head, s_job_tail;  // tail..head, free-running
+static u32 s_job_bytes;             // Staged bytes
+static LightLock s_cap_lock = 1;
+static LightEvent s_cap_ev;
+static Thread s_cap_thread;
+static volatile bool s_cap_quit;
+
+static void cap_write_inline(const char* name, const void* data, u32 size, bool append) {
+    char path[192];
+    snprintf(path, sizeof(path), "%s/%s", s_dir, name);
+    FILE* f = fopen(path, append ? "ab" : "wb");
+    if (f) {
+        if (size > 32 * 1024) setvbuf(f, NULL, _IOFBF, 32 * 1024);
+        fwrite(data, 1, size, f);
+        fclose(f);
+    }
+}
+
+static void cap_writer(void* arg) {
+    (void)arg;
+    while (!s_cap_quit) {
+        LightEvent_Wait(&s_cap_ev);
+        for (;;) {
+            LightLock_Lock(&s_cap_lock);
+            if (s_job_head == s_job_tail) {
+                LightLock_Unlock(&s_cap_lock);
+                break;
+            }
+            CapJob j = s_job[s_job_tail % CAP_JOB_MAX];
+            s_job[s_job_tail % CAP_JOB_MAX].data = NULL;
+            s_job_bytes -= j.size;
+            s_job_tail++;
+            LightLock_Unlock(&s_cap_lock);
+            cap_write_inline(j.name, j.data, j.size, j.append);
+            free(j.data);
+        }
+    }
+    // Shutdown: write whatever is left
+    for (;;) {
+        LightLock_Lock(&s_cap_lock);
+        if (s_job_head == s_job_tail) {
+            LightLock_Unlock(&s_cap_lock);
+            break;
+        }
+        CapJob j = s_job[s_job_tail % CAP_JOB_MAX];
+        s_job[s_job_tail % CAP_JOB_MAX].data = NULL;
+        s_job_bytes -= j.size;
+        s_job_tail++;
+        LightLock_Unlock(&s_cap_lock);
+        cap_write_inline(j.name, j.data, j.size, j.append);
+        free(j.data);
+    }
+}
+
+// Stage a chunk of a file: the buffer is taken over (and freed after writing).
+// Without a writer thread (creation failed, or shutdown) it is written inline.
+static void cap_write_take(const char* name, u8* data, u32 size, bool append) {
+    if (!data) return;
+    if (!s_cap_thread) {
+        cap_write_inline(name, data, size, append);
+        free(data);
+        return;
+    }
+    // Backpressure: wait while the staged bytes exceed the bound
+    for (;;) {
+        LightLock_Lock(&s_cap_lock);
+        if (s_cap_quit || s_job_head - s_job_tail >= CAP_JOB_MAX - 1 || s_job_bytes + size > CAP_QUEUE_BYTES) {
+            LightLock_Unlock(&s_cap_lock);
+            if (s_cap_quit) {
+                cap_write_inline(name, data, size, append);
+                free(data);
+                return;
+            }
+            LightEvent_Signal(&s_cap_ev);
+            svcSleepThread(2 * 1000 * 1000LL);
+            continue;
+        }
+        CapJob* j = &s_job[s_job_head % CAP_JOB_MAX];
+        snprintf(j->name, sizeof(j->name), "%s", name);
+        j->data = data;
+        j->size = size;
+        j->append = append;
+        s_job_bytes += size;
+        s_job_head++;
+        LightLock_Unlock(&s_cap_lock);
+        LightEvent_Signal(&s_cap_ev);
+        return;
+    }
+}
+
+// Wait until every staged file is written (a new capture starts only then, so
+// the files of two captures never mix in one folder)
+static void cap_drain(void) {
+    if (!s_cap_thread) return;
+    int waited = 0;
+    while (s_job_head != s_job_tail) {
+        LightEvent_Signal(&s_cap_ev);
+        svcSleepThread(5 * 1000 * 1000LL);
+        if (++waited > 12000) {  // ~60 s: give up, the writer is stuck
+            LOG_WARN("capture", "writer still busy after 60 s (%lu bytes staged), starting anyway",
+                     (unsigned long)s_job_bytes);
+            break;
+        }
+    }
+}
+
+static void cap_writer_start(void) {
+    if (s_cap_thread) return;
+    // One-time parent folders (SD ops, done here once instead of per capture)
+    mkdir("sdmc:/3ds", 0777);
+    mkdir("sdmc:/3ds/star3d", 0777);
+    mkdir(CAPTURE_ROOT, 0777);
+    if (AddDevice(&gx_capmem_devoptab) < 0) {
+        LOG_WARN("capture", "no devoptab slot for capmem:, capture files are written inline");
+    }
+    LightEvent_Init(&s_cap_ev, RESET_ONESHOT);
+    s32 prio = 0x30;
+    svcGetThreadPriority(&prio, CUR_THREAD_HANDLE);
+    s_cap_thread = threadCreate(cap_writer, NULL, 16 * 1024, prio < 0x3F ? prio + 1 : prio, -2, false);
+    if (!s_cap_thread) LOG_WARN("capture", "no capture writer thread: capture files are written inline");
+}
+
+void gx_capture_shutdown(void) {
+    if (s_states) {  // A capture was cut short: close the open tee first
+        log_set_tee(NULL);
+        fclose(s_states);
+        s_states = NULL;
+    }
+    if (!s_cap_thread) return;
+    s_cap_quit = true;
+    LightEvent_Signal(&s_cap_ev);
+    threadJoin(s_cap_thread, U64_MAX);
+    threadFree(s_cap_thread);
+    s_cap_thread = NULL;
+}
+
+// --- capmem: in-memory files ----------------------------------------------------
+// "capmem:/<name>" files buffer in the heap; closing one hands the buffer to
+// the capture writer (or writes it inline without a writer thread). The
+// render thread's capture files (states.txt tee, tex dumps, info.txt, copy
+// PPMs) never touch the SD.
+//
+// Big files are chunked: every CAP_MEM_CHUNK bytes the buffer is staged as an
+// append job and the file continues, so the heap cost of an open file stays
+// bounded and the writer's backpressure spreads over the whole pass instead
+// of one big enqueue at close.
+
+#define CAP_MEM_MAX 16
+#define CAP_MEM_CHUNK (512 * 1024)
+
+typedef struct {
+    bool used;
+    char name[CAP_JOB_NAME];
+    u8* data;
+    u32 size, cap, pos;  // Buffer-relative; the logical file offset is base + pos
+    u32 base;            // Bytes already staged to the writer as chunks
+    bool first_chunk;
+} CapMemFile;
+
+static CapMemFile s_mem[CAP_MEM_MAX];
+static LightLock s_mem_lock = 1;
+
+typedef struct { int slot; } CapMemFD;
+
+// Stage the buffer as a chunk (append unless it is the file's first chunk)
+static void capmem_flush_chunk(CapMemFile* m) {
+    if (!m->size) return;
+    cap_write_take(m->name, m->data, m->size, !m->first_chunk);
+    m->first_chunk = false;
+    m->base += m->size;
+    m->data = NULL;
+    m->size = m->cap = m->pos = 0;
+}
+
+static int capmem_open(struct _reent* r, void* fd, const char* path, int flags, int mode) {
+    (void)r; (void)flags; (void)mode;
+    if (!path || strncmp(path, "capmem:/", 8) != 0 || !path[8]) return -1;
+    LightLock_Lock(&s_mem_lock);
+    int slot = -1;
+    for (int i = 0; i < CAP_MEM_MAX; i++)
+        if (!s_mem[i].used) { slot = i; break; }
+    if (slot < 0) {
+        LightLock_Unlock(&s_mem_lock);
+        return -1;
+    }
+    CapMemFile* m = &s_mem[slot];
+    m->used = true;
+    snprintf(m->name, sizeof(m->name), "%s", path + 8);
+    m->data = NULL;
+    m->size = m->cap = m->pos = m->base = 0;
+    m->first_chunk = true;
+    ((CapMemFD*)fd)->slot = slot;
+    LightLock_Unlock(&s_mem_lock);
+    return 0;
+}
+
+static CapMemFile* capmem_get(void* fd) {
+    CapMemFD* f = fd;
+    if (!f || f->slot < 0 || f->slot >= CAP_MEM_MAX || !s_mem[f->slot].used) return NULL;
+    return &s_mem[f->slot];
+}
+
+static ssize_t capmem_write(struct _reent* r, void* fd, const char* ptr, size_t len) {
+    (void)r;
+    CapMemFile* m = capmem_get(fd);
+    if (!m) return -1;
+    LightLock_Lock(&s_mem_lock);
+    if (m->size + len > m->cap) {
+        u32 cap = m->cap ? m->cap * 2 : 16 * 1024;
+        while (cap < m->size + (u32)len) cap *= 2;
+        u8* p = realloc(m->data, cap);
+        if (!p) {
+            LightLock_Unlock(&s_mem_lock);
+            return -1;
+        }
+        m->data = p;
+        m->cap = cap;
+    }
+    memcpy(m->data + m->pos, ptr, len);
+    m->pos += (u32)len;
+    if (m->pos > m->size) m->size = m->pos;
+    if (m->size >= CAP_MEM_CHUNK) capmem_flush_chunk(m);
+    LightLock_Unlock(&s_mem_lock);
+    return len;
+}
+
+static off_t capmem_seek(struct _reent* r, void* fd, off_t pos, int dir) {
+    (void)r;
+    CapMemFile* m = capmem_get(fd);
+    if (!m) return -1;
+    LightLock_Lock(&s_mem_lock);
+    off_t logical = dir == SEEK_SET ? 0 : dir == SEEK_CUR ? (off_t)(m->base + m->pos) : (off_t)(m->base + m->size);
+    off_t np = logical + pos;
+    if (np < 0) np = 0;
+    off_t rel = np - (off_t)m->base;
+    if (rel < 0) rel = 0;
+    m->pos = (u32)rel;
+    if (m->pos > m->size) m->size = m->pos;
+    LightLock_Unlock(&s_mem_lock);
+    return np;
+}
+
+static int capmem_close(struct _reent* r, void* fd) {
+    (void)r;
+    CapMemFile* m = capmem_get(fd);
+    if (!m) return -1;
+    LightLock_Lock(&s_mem_lock);
+    capmem_flush_chunk(m);
+    m->used = false;
+    LightLock_Unlock(&s_mem_lock);
+    return 0;
+}
+
+devoptab_t gx_capmem_devoptab = {
+    .name = "capmem",
+    .structSize = sizeof(CapMemFD),
+    .open_r = capmem_open,
+    .close_r = capmem_close,
+    .write_r = capmem_write,
+    .seek_r = capmem_seek,
+};
+
+// --- Framebuffer readback -------------------------------------------------------
 // Byte offset of fb pixel (x, y) in the 8x8 tiled buffer, in pixels
 static u32 tiled_index(u32 x, u32 y, u32 w) {
     u32 m = 0;
@@ -80,37 +373,37 @@ static u32 depth_at(const C3D_FrameBuf* fb, u32 x, u32 y) {
 static int bpp_color(int fmt) { return fmt == GPU_RB_RGBA8 ? 4 : fmt == GPU_RB_RGB8 ? 3 : 2; }
 static int bpp_depth(int fmt) { return fmt == GPU_RB_DEPTH16 ? 2 : fmt == GPU_RB_DEPTH24 ? 3 : 4; }
 
-// Buffers outside VRAM can sit in the data cache
+// The GPU wrote the buffers; invalidate the CPU data cache for the whole
+// range before reading. VRAM is cached too: skipping it left stale 64-byte
+// lines from the previous pass (the 4x4-block artifact in tint/light/normals,
+// bug 34's capture note).
 static void invalidate(const void* p, u32 size) {
-    u32 a = (u32)p;
-    if (a < 0x1F000000 || a >= 0x1F600000) GSPGPU_InvalidateDataCache(p, size);
+    if (!p || !size) return;
+    GSPGPU_InvalidateDataCache(p, size);
 }
 
-// 24-bit BMP, rows bottom-up and padded to 4 bytes; rgb is w*h*3 top-down
+// 24-bit BMP, rows bottom-up and padded to 4 bytes; rgb is w*h*3 top-down.
+// Built in memory and handed to the capture writer.
 static void write_bmp(const char* name, const u8* rgb, u32 w, u32 h) {
-    char path[160];
-    snprintf(path, sizeof(path), "%s/%s", s_dir, name);
-    FILE* f = fopen(path, "wb");
-    if (!f) {
-        LOG_WARN("capture", "cannot write %s", path);
+    u32 row = (w * 3 + 3) & ~3u, size = 54 + row * h;
+    u8* out = malloc(size);
+    if (!out) {
+        LOG_WARN("capture", "no memory for %s", name);
         return;
     }
-    u32 row = (w * 3 + 3) & ~3u, size = 54 + row * h;
-    u8 hdr[54] = { 'B', 'M' };
+    memset(out, 0, size);
+    out[0] = 'B', out[1] = 'M';
     u32 fields[] = { size, 0, 54, 40, w, h };
-    memcpy(hdr + 2, fields, sizeof(fields));
-    hdr[26] = 1, hdr[28] = 24;
+    memcpy(out + 2, fields, sizeof(fields));
+    out[26] = 1, out[28] = 24;
     u32 img = row * h;
-    memcpy(hdr + 34, &img, 4);
-    fwrite(hdr, 1, 54, f);
-    u8* line = calloc(1, row);
-    for (u32 y = h; y-- > 0;) {
+    memcpy(out + 34, &img, 4);
+    for (u32 y = 0; y < h; y++) {
+        u8* line = out + 54 + (h - 1 - y) * row;
         const u8* s = rgb + y * w * 3;
         for (u32 x = 0; x < w; x++) line[x * 3] = s[x * 3 + 2], line[x * 3 + 1] = s[x * 3 + 1], line[x * 3 + 2] = s[x * 3];
-        fwrite(line, 1, row, f);
     }
-    free(line);
-    fclose(f);
+    cap_write_take(name, out, size, false);
 }
 
 static void write_color(const char* name, const C3D_FrameBuf* fb, bool with_alpha) {
@@ -119,6 +412,12 @@ static void write_color(const char* name, const C3D_FrameBuf* fb, bool with_alph
     u8* a = with_alpha ? malloc(lw * lh * 3) : NULL;
     if (!rgb) {
         free(a);
+        LOG_WARN("capture", "no memory for %s", name);
+        return;
+    }
+    if (with_alpha && !a) {
+        free(rgb);
+        LOG_WARN("capture", "no memory for %s", name);
         return;
     }
     for (u32 Y = 0; Y < lh; Y++) {
@@ -162,13 +461,8 @@ static void write_depth(const C3D_FrameBuf* fb, u32* out_min, u32* out_max) {
             memset(rgb + i * 3, g, 3);
         }
         write_bmp("depth.bmp", rgb, lw, lh);
-        char path[160];
-        snprintf(path, sizeof(path), "%s/depth.bin", s_dir);
-        FILE* f = fopen(path, "wb");
-        if (f) {
-            fwrite(d, 4, lw * lh, f);
-            fclose(f);
-        }
+        cap_write_take("depth.bin", (u8*)d, lw * lh * 4, false);
+        d = NULL;
     }
     free(d);
     free(rgb);
@@ -178,9 +472,7 @@ static void write_depth(const C3D_FrameBuf* fb, u32* out_min, u32* out_max) {
 
 static void write_info(const C3D_FrameBuf* fb, int top_mode, bool lowres, u32 dmin, u32 dmax) {
     static const char* modes[] = { "mono", "stereo (left eye)", "wide", "antialiased" };
-    char path[160];
-    snprintf(path, sizeof(path), "%s/info.txt", s_dir);
-    FILE* f = fopen(path, "w");
+    FILE* f = fopen("capmem:/info.txt", "w");
     if (!f) return;
     fprintf(f, "frame %lu\nmode %s%s\n", (unsigned long)gx_render_frame_number(),
             top_mode >= 0 && top_mode < 4 ? modes[top_mode] : "?", lowres ? ", low resolution target" : "");
@@ -207,9 +499,6 @@ static void write_info(const C3D_FrameBuf* fb, int top_mode, bool lowres, u32 dm
 }
 
 static bool make_dir(void) {
-    mkdir("sdmc:/3ds", 0777);
-    mkdir("sdmc:/3ds/star3d", 0777);
-    mkdir(CAPTURE_ROOT, 0777);
     time_t now = time(NULL);
     struct tm* t = gmtime(&now);
     snprintf(s_dir, sizeof(s_dir), CAPTURE_ROOT "/%04d%02d%02d_%02d%02d%02d_f%lu", t->tm_year + 1900, t->tm_mon + 1,
@@ -231,26 +520,26 @@ void gx_capture_frame(const C3D_FrameBuf* fb, int top_mode, bool lowres) {
     int mode = g_gx_cap_mode;
     if (mode == GX_CAP_NONE) {
         s_requested = false;
+        cap_drain();  // The previous capture's files, done: one folder at a time
+        cap_writer_start();
         if (!make_dir()) return;
         write_color("color.bmp", fb, fb->colorFmt != GPU_RB_RGB8 && fb->colorFmt != GPU_RB_RGB565);
         u32 dmin = 0, dmax = 0;
         if (fb->depthBuf) write_depth(fb, &dmin, &dmax);
-        gx_copy_dump_dir(s_dir);
+        gx_copy_dump_capture();
         write_info(fb, top_mode, lowres, dmin, dmax);
-        char path[160];
-        snprintf(path, sizeof(path), "%s/states.txt", s_dir);
-        s_states = fopen(path, "w");
+        s_states = fopen("capmem:/states.txt", "w");
         if (s_states) log_set_tee(s_states);
     } else {
         static const char* names[] = { NULL, "id.bmp", "tint.bmp", "light.bmp", "normals.bmp" };
         write_color(names[mode], fb, false);
         if (mode == GX_CAP_ID && s_states) {
             log_set_tee(NULL);
-            fclose(s_states);
+            fclose(s_states);  // capmem close: hands the buffered states.txt to the writer
             s_states = NULL;
         }
     }
     g_gx_cap_mode = mode == GX_CAP_NORMALS ? GX_CAP_NONE : mode + 1;
     g_gx.dirty = GX_DIRTY_ALL;
-    if (g_gx_cap_mode == GX_CAP_NONE) LOG_WARN("capture", "capture written to %s", s_dir);
+    if (g_gx_cap_mode == GX_CAP_NONE) LOG_WARN("capture", "capture passes done, files land in %s (background)", s_dir);
 }

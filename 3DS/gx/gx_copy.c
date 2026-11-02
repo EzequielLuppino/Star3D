@@ -98,15 +98,20 @@ static void free_later(C3D_Tex* tex) {
 
 void gx_copy_dump_all(void) { gx_copy_dump_dir("sdmc:/3ds/star3d"); }
 
-void gx_copy_dump_dir(const char* dir) {
+// Shared dump loop. prefix "sdmc:/3ds/star3d" writes copyN.ppm straight there
+// (the copydump trigger); prefix "capmem:" buffers the files in memory for
+// the render capture's writer thread (gx_capture.c, bug 40: no SD writes from
+// the render thread).
+static void gx_copy_dump_prefix(const char* prefix, bool mem) {
     for (int i = 0; i < MAX_COPIES; i++) {
         const GxCopyTex* c = &s_copies[i];
         if (!c->dest) continue;
         u32 w = c->src_w / 2 ? c->src_w / 2 : 1, h = c->src_h / 2 ? c->src_h / 2 : 1;
         char path[160];
-        snprintf(path, sizeof(path), "%s/copy%d.ppm", dir, i);
+        snprintf(path, sizeof(path), "%s/copy%d.ppm", prefix, i);
         FILE* f = fopen(path, "wb");
         if (!f) continue;
+        if (mem) setvbuf(f, NULL, _IOFBF, 64 * 1024);  // capmem: batch the per-pixel writes
         fprintf(f, "P6\n%lu %lu\n255\n", (unsigned long)w, (unsigned long)h);
         const u32* texels = (const u32*)c->tex.data;
         for (u32 y = 0; y < h; y++) {
@@ -131,9 +136,10 @@ void gx_copy_dump_dir(const char* dir) {
         const u8* lv = c->tex.data;
         u32 lw = c->tex.width, lh = c->tex.height;
         for (int l = 0; l <= c->mip_levels && lw >= 8 && lh >= 8; l++) {
-            snprintf(path, sizeof(path), "%s/copy%d_m%d.ppm", dir, i, l);
+            snprintf(path, sizeof(path), "%s/copy%d_m%d.ppm", prefix, i, l);
             FILE* mf = fopen(path, "wb");
             if (mf) {
+                if (mem) setvbuf(mf, NULL, _IOFBF, 64 * 1024);
                 fprintf(mf, "P6\n%lu %lu\n255\n", (unsigned long)lw, (unsigned long)lh);
                 const u32* tx32 = (const u32*)lv;
                 for (u32 y = lh; y-- > 0;) {
@@ -156,6 +162,11 @@ void gx_copy_dump_dir(const char* dir) {
                  (unsigned long)c->last_frame, (unsigned long)s_frame);
     }
 }
+
+void gx_copy_dump_dir(const char* dir) { gx_copy_dump_prefix(dir, false); }
+
+// The render capture's copy dumps: staged through capmem files
+void gx_copy_dump_capture(void) { gx_copy_dump_prefix("capmem:", true); }
 
 void gx_copy_frame_begin(void) {
     s_frame++;

@@ -197,6 +197,7 @@ void gx_deinit(void) {
     gx_gpu_wait_idle();  // Pipelined, the last frame may still be drawing
     if (s_perflog_on) GSPGPU_SetPerfLogMode(false);
     gx_render_deinit();
+    gx_capture_shutdown();  // Write out any staged capture files, then stop
 
     if (right_target) {
         C3D_RenderTargetDelete(right_target);  // Does not own the shared color buffer
