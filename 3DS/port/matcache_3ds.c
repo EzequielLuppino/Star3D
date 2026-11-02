@@ -35,6 +35,7 @@ typedef struct {
     int lights;
     u32 idx;
     u32 advance;
+    u32 ah;
     int rcp[7];
     GxState state;
     u32 last_used;
@@ -43,6 +44,17 @@ typedef struct {
 
 static MatEntry s_entries[256];
 static u32 s_last_advance;
+
+static u32 anim_hash(const void* anim) {
+    const u8* p = (const u8*)anim;
+    u32 h = 0x811C9DC5u;
+    for (int i = 0; i < 16; i++) {
+        u32 w;
+        memcpy(&w, p + i * 4, 4);
+        h = (h ^ w) * 0x01000193u;
+    }
+    return h;
+}
 
 static u32 bs_hash(const void* data, u32 pos) {
     // Sampled words from the instruction stream at the setup's position
@@ -88,11 +100,12 @@ u32 port_mat_setup(void* obj, void* m, void* am, u32 bs_pos, const void* bs_data
     CFG_LIVE(on, cfg_int("S3D_MAT_CACHE", 0));
     if (!on || !g_map_loaded) return 0xFFFFFFFFu;  // The title/attract scenes stay uncached
     u32 key_hash = bs_hash(bs_data, bs_pos);
+    u32 ah = anim_hash(anim);
     for (int i = 0; i < 256; i++) {
         MatEntry* e = &s_entries[i];
         if (!e->used) continue;
         if (e->obj == obj && e->m == m && e->am == am && e->bs_pos == bs_pos && e->bs_hash == key_hash &&
-            e->anim == anim && e->lights == lights) {
+            e->anim == anim && e->ah == ah && e->lights == lights) {
             e->last_used = prof_frame_count();
             gxrec_delta_restore(&e->state);
             rcp_load(e);
@@ -136,6 +149,7 @@ u32 port_mat_setup(void* obj, void* m, void* am, u32 bs_pos, const void* bs_data
 u32 port_mat_end(void* obj, void* m, void* am, u32 bs_pos, const void* bs_data, void* anim, int lights,
                  u32 idx, u32 advance) {
     u32 key_hash = bs_hash(bs_data, bs_pos);
+    u32 ah = anim_hash(anim);
     MatEntry* slot = NULL;
     u32 oldest = 0xFFFFFFFFu;
     for (int i = 0; i < 256; i++) {
@@ -158,6 +172,7 @@ u32 port_mat_end(void* obj, void* m, void* am, u32 bs_pos, const void* bs_data, 
     slot->lights = lights;
     slot->idx = idx;
     slot->advance = advance;
+    slot->ah = ah;
     slot->last_used = prof_frame_count();
     rcp_save(slot);
     gxrec_delta_snapshot(&slot->state);

@@ -105,7 +105,9 @@ typedef struct {
 // clears are per-object or per-frame state and stay on their own paths (the
 // render side loads some of them from the display lists - restoring them
 // from the cache would overwrite those).
-static const u64 s_mat_mask = (1ull << RD_NUM_TEXGENS) | (1ull << RD_PIXEL) | (1ull << RD_TEX_OFFSET_EN) |
+static const u64 s_mat_mask = (1ull << RD_NUM_TEXGENS) | (1ull << RD_NUM_CHANS) | (1ull << RD_CHAN) |
+                              (1ull << RD_CHAN_MAT) | (1ull << RD_CHAN_AMB) | (1ull << RD_PIXEL) |
+                              (1ull << RD_TEX_OFFSET_EN) |
                               (1ull << RD_TEXCOPY) | (1ull << RD_TEV_STAGES) | (1ull << RD_TEV_REGS) |
                               (1ull << RD_TEV_KCOLORS) | (1ull << RD_TEV_SWAP) | (1ull << RD_TEV_NUM) |
                               (1ull << RD_TEV_WARP) | (1ull << RD_TEV_IND) | (1ull << RD_TEV_IND_MAP) |
@@ -346,10 +348,16 @@ void gxrec_delta_restore(const GxState* in) {
         // The fog stays per-frame: the restore skips the pixel state's fog
         // fields (they are the tail of the region)
         if (i == RD_PIXEL) size = (u32)offsetof(GxPixelState, fog_type);
+        // The diff: consecutive draws of the same material leave the state
+        // unchanged - the unchanged regions cost only the memcmp, and only
+        // the changed ones are marked for the flush (the full-region mark
+        // shipped the whole material per hit and slowed the pipeline)
+        if (memcmp((const u8*)in + s_region_table[i].off, (const u8*)&s_shadow + s_region_table[i].off, size) == 0)
+            continue;
         memcpy((u8*)&s_shadow + s_region_table[i].off, (const u8*)in + s_region_table[i].off, size);
         memcpy((u8*)&g_gx + s_region_table[i].off, (const u8*)in + s_region_table[i].off, size);
+        s_regions |= 1ull << i;
     }
-    s_regions |= s_mat_mask;  // The next flush ships the material regions
     s_dirty = 0xFFFFFFFFu;
 }
 
@@ -395,25 +403,6 @@ const u32* gxrec_delta_take(u32* mwords, u32* dwords) {
 }
 
 // The consumer side: apply one recorded delta packet
-u32 matcache_shadow_hash(void) {
-    u32 h = 0x811C9DC5u;
-    u32 n = 0;
-    for (int i = 0; i < RD_COUNT; i++) {
-        if (!(s_mat_mask & (1ull << i))) continue;
-        u32 size = s_region_table[i].size;
-        if (i == RD_PIXEL) size = (u32)offsetof(GxPixelState, fog_type);
-        const u8* p = (const u8*)&s_shadow + s_region_table[i].off;
-        for (u32 o = 0; o < size; o += 23) {
-            u32 w;
-            memcpy(&w, p + o, 4);
-            h = (h ^ w) * 0x01000193u;
-            n++;
-        }
-    }
-    (void)n;
-    return h;
-}
-
 void gxrec_delta_apply(const u32* p, u32 words) {
     (void)words;
     u64 bm = p[0] | ((u64)p[1] << 32);
