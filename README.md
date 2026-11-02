@@ -267,11 +267,11 @@ Details are in `3DS/CONTROLS.md`.
 ## Settings menu
 
 The Settings tab on the touch screen lists the everyday options. The
-defaults are: 30 FPS cap on, adaptive frame pacing on, shadows on, fog on,
-fur in cutscenes, grass quality high, object distance high, depth of field
-on, gyro aiming on, C-stick camera on and logging off. The 3D options are
-"3D: faster (fewer effects)" (half the fur layers and no blur while the 3D
-slider is up) and "3D: depth follows Fox" (the screen depth tracks Fox).
+defaults are: 30 FPS cap on, adaptive frame pacing on, shadow decals (Low),
+fog on, fur in cutscenes, grass quality high, object distance high, depth of
+field on, gyro aiming on, C-stick camera on and logging off. The 3D options
+are "3D: faster (fewer effects)" (half the fur layers and no blur while the
+3D slider is up) and "3D: depth follows Fox" (the screen depth tracks Fox).
 "Grass quality" (`S3D_GRASS_QUALITY`) is High (the default: the fern trees,
 grass clumps and flowers all render), Low (trees only: the grass clumps and
 flowers are hidden) or Off (no plants at all, the fruit hanging on the trees
@@ -280,12 +280,12 @@ original game have no visual impact on the 3DS and are always skipped
 (`S3D_GRASS_BUDGET` default 0; env.txt can still set it). "Object distance"
 (`S3D_LOD`, independent of Grass quality) is High (the game's full draw
 ranges), Mid (half) or Low (30%): farther objects are not drawn. Shadows
-(`S3D_SHADOWS`) draw as flat terrain-hugging decals by default
-(`S3D_SHADOW_DECALS=1`): one cheap quad per object instead of the projected
-shadow meshes and the per-caster render-to-texture passes, and they follow
-the LOD settings (only rendered objects cast them, fading with their
-renderAlpha). `S3D_SHADOW_DECALS=0` restores the GameCube's projected
-shadows.
+(`S3D_SHADOW_MODE`) is High (the GameCube's projected shadows and the
+per-caster render-to-texture passes), Low (flat terrain-hugging decals: one
+cheap quad per object, the default) or Off. The decals follow the LOD
+settings (only rendered objects cast them, fading with their renderAlpha);
+env.txt can still set the old `S3D_SHADOWS`/`S3D_SHADOW_DECALS` switches,
+which apply while the mode is unset.
 
 The renderer and debug options are hidden and keep their defaults: render
 thread on core 2, state deltas on, far animation LOD strong, back-face culling

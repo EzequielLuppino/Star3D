@@ -63,6 +63,10 @@ static const char* const grass_quality_names[] = { "Off", "Low", "High" };
 // Mid = half, Low = 30%, independent of the grass settings
 static const int obj_lod_choices[] = { 2, 1, 0, INT32_MIN };
 static const char* const obj_lod_names[] = { "Low", "Mid", "High" };
+// S3D_SHADOW_MODE (Settings > Shadows): High = the game's projected shadows,
+// Low = decals (one flat ground quad per object), Off = none
+static const int shadow_mode_choices[] = { 2, 1, 0, INT32_MIN };
+static const char* const shadow_mode_names[] = { "Off", "Low", "High" };
 static const int fur_choices[] = { 1, 2, 0, INT32_MIN };
 static const char* const fur_names[] = { "Off", "Cutscene", "Always" };
 static const int anim_lod_choices[] = { 1, 2, 0, INT32_MIN };
@@ -126,7 +130,7 @@ static const Row settings_rows[] = {
     { "30 FPS cap", ROW_BOOL, "S3D_FPS_CAP30", 1 },
     { "Adaptive frame pacing", ROW_BOOL, "S3D_FRAME_PACE_ADAPTIVE", 1 },
     { "Render thread", ROW_CHOICE, "S3D_RENDER_THREAD", 2, rt_choices, rt_names, .advanced = true },
-    { "Shadows", ROW_BOOL, "S3D_SHADOWS", 1 },
+    { "Shadows", ROW_CHOICE, "S3D_SHADOW_MODE", 1, shadow_mode_choices, shadow_mode_names },
     { "Far animation LOD", ROW_CHOICE, "S3D_ANIM_LOD", 2, anim_lod_choices, anim_lod_names, .advanced = true },
     { "Back-face culling", ROW_BOOL, "S3D_CULL", 1, .advanced = true },
     { "Fog", ROW_BOOL, "S3D_FOG", 1 },

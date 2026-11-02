@@ -1903,27 +1903,37 @@ bool gx_right_eye_buffers(u8** color, u8** depth) {
     return true;
 }
 
-// Shadows (touch UI setting S3D_SHADOWS, patches/main/lightmap.c.sed): off,
-// objects queue no shadow casters and draw no shadow textures
+// Shadows (touch UI setting S3D_SHADOW_MODE, patches/main/lightmap.c.sed).
+// S3D_SHADOW_MODE: -1 = unset (fall back to the S3D_SHADOWS on/off and
+// S3D_SHADOW_DECALS switches), 0 = Off, 1 = Low (decals), 2 = High (the
+// game's projected shadows and caster render-to-texture passes)
+int port_shadow_mode(void) {
+    static int mode = -2;
+    CFG_LIVE(mode, cfg_int("S3D_SHADOW_MODE", -1));
+    return mode;
+}
+
 bool port_shadows_enabled(void) {
     static int on = -1;
     CFG_LIVE(on, cfg_bool("S3D_SHADOWS", true));
-    return on;
+    int m = port_shadow_mode();
+    return m < 0 ? on : m > 0;
 }
 
-// Shadow decals (S3D_SHADOW_DECALS, default 1): with shadows on, every
-// shadowed object draws one flat ground quad (the game's own
+// Shadow decals (S3D_SHADOW_MODE Low, or S3D_SHADOW_DECALS while the mode is
+// unset): every shadowed object draws one flat ground quad (the game's own
 // objDrawGroundShadow: a terrain-conforming decal, rebuilt each frame so
 // moving objects keep it on the ground) instead of the projected shadow
 // meshes and the caster render-to-texture passes (patches/main/lightmap.c.sed
 // and lightmap_draw.c.sed). The decals follow the LOD settings: only objects
 // that passed the distance cuts (S3D_OBJ_DIST / S3D_LOD) and the grass
 // quality reach the shadow queue, and the game's own distance fade multiplies
-// the object's renderAlpha. 0 restores the game's shadows.
+// the object's renderAlpha.
 bool port_shadow_decals(void) {
     static int on = -1;
     CFG_LIVE(on, cfg_int("S3D_SHADOW_DECALS", 1));
-    return on;
+    int m = port_shadow_mode();
+    return m < 0 ? on : m == 1;
 }
 
 // Shadow levers (MULTICORE_PLAN.md "Shadow levers"; hooks in

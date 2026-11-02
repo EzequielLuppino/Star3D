@@ -115,7 +115,7 @@ static const struct {
 } k_sweep[] = {
     { "baseline", { NULL }, { 0 } },
     { "no grass layers", { "S3D_GRASS_BUDGET" }, { 0 } },
-    { "no shadows", { "S3D_SHADOWS" }, { 0 } },
+    { "no shadows", { "S3D_SHADOW_MODE" }, { 0 } },
     { "no fragment lighting", { "S3D_FRAG_LIGHT" }, { 0 } },
     { "no fog", { "S3D_FOG" }, { 0 } },
     { "no water ripples / caustics", { "S3D_WATER_WARP", "S3D_CAUSTIC_WARP" }, { 0, 0 } },
@@ -185,7 +185,7 @@ static const struct {
     // cache (gObjCachedTexture, objprint_dolphin.c)
     { "display-list batching off", "S3D_DL_BATCH", 0, 1 },
     { "shadow refresh every frame", "S3D_SHADOW_REFRESH", 1, 2 },
-    { "shadows off", "S3D_SHADOWS", 0, 1 },
+    { "shadows off", "S3D_SHADOW_MODE", 0, 1 },
     { "animation LOD off", "S3D_ANIM_LOD", 0, 2 },
     { "map material dedup off", "S3D_MAP_DEDUP", 0, 3 },
     { "render thread off (replay on the game thread)", "S3D_RENDER_THREAD", 1, 2 },
@@ -310,8 +310,8 @@ static const struct {
     { "S3D_VSH_LEAN_AB", "S3D_VSH_LEAN", "vshab", "lean", 2, { 3, 0 } },
     // 5 / 7: no filter (the default) / record-time filter (bit 2) (gx_rec.c)
     { "S3D_RT_DEDUP_AB", "S3D_RT_DEDUP", "dedupab", "dedup", 2, { 5, 7 } },
-    // Price of shadows and of Fur "Always" (vs the default "Cutscene") on the same spot
-    { "S3D_SHADOWS_AB", "S3D_SHADOWS", "shadowab", "shadows", 2, { 1, 0 } },
+    // Price of shadows (Settings > Shadows): High (projected) / Low (decals) / Off
+    { "S3D_SHADOWS_AB", "S3D_SHADOW_MODE", "shadowab", "shadows", 3, { 2, 1, 0 } },
     { "S3D_FUR_MODE_AB", "S3D_FUR_MODE", "furab", "fur", 2, { 2, 1 } },
     // Shadow levers (gx_init.c): texture passes 8 / 3 / 0, refresh every frame / every 2nd
     { "S3D_SHADOW_TEXTURES_AB", "S3D_SHADOW_TEXTURES", "shtexab", "shadow textures", 3, { 8, 3, 0 } },
