@@ -142,6 +142,14 @@ Round 2 changes:
 - volume cut: EFB copy PPMs now need S3D_CAP_COPIES=1, per-state tex dumps
   need S3D_CAP_TEXDUMP (default 0, was 7).
 
+## Verified on hardware (2026-11-02, build 8814a5f)
+
+Two snapshots taken by the user, both complete (color/alpha/depth/depth.bin/
+info.txt/states.txt ~1 MB/id/tint/light/normals, no truncation). The log shows:
+mark at 37.6 s -> capture phase 2.7 s -> "capture passes done, files land in
+... (background)" at 46.9 s -> the folder completed in the background. No
+crash, no freeze, no dropped files.
+
 ## Repro / test
 
 1. `make -C 3DS code` (or `./build.sh code`), push `star3d-nodata.3dsx` as
