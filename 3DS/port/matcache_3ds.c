@@ -40,7 +40,6 @@ typedef struct {
     int lights;
     u32 idx;
     u32 advance;
-    u32 mat_hash;
     int rcp[7];
     GxState state;
     u32 last_used;
@@ -101,12 +100,8 @@ u32 port_mat_setup(void* obj, void* m, void* am, u32 bs_pos, const void* bs_data
         if (e->used && e->obj == obj && e->m == m && e->am == am && e->bs_pos == bs_pos && e->bs_hash == key_hash &&
             e->anim == anim && e->lights == lights) {
             e->last_used = prof_frame_count();
-            // The material is usually still the applied one (the consecutive
-            // draws of the same object): the hash check skips the restore
-            if (e->mat_hash != matcache_shadow_hash()) {
-                gxrec_delta_restore(&e->state);
-                PROF_COUNT("mat.restores", 1);
-            }
+            gxrec_delta_restore(&e->state);
+            PROF_COUNT("mat.restores", 1);
             rcp_load(e);
             s_last_advance = e->advance;
             PROF_COUNT("mat.hits", 1);
@@ -140,7 +135,6 @@ u32 port_mat_end(void* obj, void* m, void* am, u32 bs_pos, const void* bs_data, 
     slot->lights = lights;
     slot->idx = idx;
     slot->advance = advance;
-    slot->mat_hash = matcache_shadow_hash();
     slot->last_used = prof_frame_count();
     rcp_save(slot);
     gxrec_delta_snapshot(&slot->state);
