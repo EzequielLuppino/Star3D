@@ -100,6 +100,14 @@ float port_obj_range(const void* obj, const char* name, int def_id, int class_id
         PROF_COUNT("plant.hidden", 1);
         return 0.0f;
     }
+    // The fruit (AppleOnTree, DLL 279) hangs on the fern trees (DLL 687) and
+    // is positioned by its tree every frame (687.c tree_updateAmbientEffects),
+    // so hiding the trees leaves the fruit floating in the air. Hide the
+    // fruit with the trees.
+    if (dll_id == 279 && plants_mode(687) == 0) {
+        PROF_COUNT("plant.hidden", 1);
+        return 0.0f;
+    }
     dist_store(obj, d);
     static int pct = -1, lod = -1;
     CFG_LIVE(pct, cfg_int("S3D_OBJ_DIST", 100));

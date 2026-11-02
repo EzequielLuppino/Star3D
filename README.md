@@ -274,7 +274,8 @@ on, gyro aiming on, C-stick camera on and logging off. The 3D options are
 slider is up) and "3D: depth follows Fox" (the screen depth tracks Fox).
 "Grass quality" (`S3D_GRASS_QUALITY`) is High (the default: the fern trees,
 grass clumps and flowers all render), Low (trees only: the grass clumps and
-flowers are hidden) or Off (no plants at all). The grass blade passes of the
+flowers are hidden) or Off (no plants at all, the fruit hanging on the trees
+goes with them). The grass blade passes of the
 original game have no visual impact on the 3DS and are always skipped
 (`S3D_GRASS_BUDGET` default 0; env.txt can still set it). "Object distance"
 (`S3D_LOD`, independent of Grass quality) is High (the game's full draw
