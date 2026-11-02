@@ -25,10 +25,12 @@ typedef struct {
 // gx_render.c, gx_copy.c): the snapshot's cfg_int falls back to it when the
 // key was never set, so a wrong value here restores broken settings (the
 // first take restored OBJ_DIST/OBJ_MINPX to 0 and hid every object in 2D).
+// Object distance is deliberately left alone: the profile must not change the
+// LOD settings (S3D_OBJ_DIST / S3D_OBJ_MINPX / S3D_LOD stay whatever the
+// user chose), so objects render at the same distance with the slider up.
+// The grass quality is left alone too: plants follow the user's Grass
+// quality row (S3D_PLANTS stays as set), instead of being hidden in 3D.
 static const ProfileKey s_profile[] = {
-    { "S3D_OBJ_DIST", 30, 100 },
-    { "S3D_OBJ_MINPX", 45, 10 },
-    { "S3D_PLANTS", 0, 1 },
     { "S3D_SHADOWS", 0, 1 },
     { "S3D_FUR_MODE", 0, 1 },
     // Grass passes are off by default (no visual impact); env.txt may raise
