@@ -86,6 +86,26 @@ void GXSetTexCopyDst(u16 wd, u16 ht, GXTexFmt fmt, GXBool mipmap) {
     s_dst_fmt = (u8)fmt;
 }
 
+// Bug 38: in stereo every copy used to double (the right eye's own half into
+// tex_r), and the hub's command queue ran out before the 640x480 screen copy
+// that water, heat haze and the blur sample: it was dropped every frame,
+// expired after 300 frames and the water bound the raw, never-written buffer
+// (black water). Only screen-spanning copies hold view-dependent content, so
+// only they get the right-eye texture; the small procedural copies (shadow
+// textures, distortion slots, frame textures) are view-independent and both
+// eyes sample the same texture. S3D_COPY_RIGHT_FULL=0 restores the old
+// every-copy behaviour (hardware A/B).
+static int s_right_full = -1;
+
+// Stereo: the same rectangle of the right eye's half into tex_r, so
+// effects that sample the EFB (heat haze, water, blur) match each eye.
+// Over budget, the right eye falls back to the left copy.
+static bool right_eye_wanted(u16 W, u16 H, bool* eyes, u8** r_color, u8** r_depth) {
+    CFG_LIVE(s_right_full, cfg_bool("S3D_COPY_RIGHT_FULL", true) ? 1 : 0);
+    *eyes = gx_right_eye_buffers(r_color, r_depth);
+    return *eyes && ((W >= 640 && H >= 480) || !s_right_full);
+}
+
 // A copy texture may be in use by GPU work of this frame or (pipelined) the
 // previous one: the fence frees it once this frame is done
 static void free_later(C3D_Tex* tex) {
@@ -414,6 +434,21 @@ void GXCopyTex(void* dest, GXBool clear) {
         LOG_ONCE(LOG_LEVEL_WARN, "gx", "GXCopyTex: too many copies in one frame (skipped)");
         PROF_COUNT("gx.copytex_over_budget", 1);
         g_gx_copy_skips++;
+        // Bug 38: a copy that stops fitting must not lose its texture. The
+        // game keeps binding it (GXInitTexObj by address), and once the entry
+        // expires the draw falls back to the raw, never-written buffer
+        // (black water). Keep it fresh so it stays bound with its last
+        // copied contents; the next successful copy refreshes them.
+        GxCopyTex* e = (GxCopyTex*)gx_copytex_find(dest);
+        if (e) {
+            e->last_frame = s_frame;
+            static u32 s_skip_logged;
+            if (s_skip_logged < 8 && s_frame % 64 == 0) {
+                s_skip_logged++;
+                LOG_INFO("gx", "copy skipped (queue %d of %d): dest %p %ux%u kept stale", s_queue_used, QUEUE_BUDGET,
+                         dest, (unsigned)e->src_w, (unsigned)e->src_h);
+            }
+        }
         goto do_clear;
     }
 
@@ -477,11 +512,11 @@ void GXCopyTex(void* dest, GXBool clear) {
         PROF_COUNT("gx.copytex_blur", 1);
     }
 
-    // Stereo: the same rectangle of the right eye's half into tex_r, so
-    // effects that sample the EFB (heat haze, water, blur) match each eye.
-    // Over budget, the right eye falls back to the left copy.
-    u8 *r_color, *r_depth;
-    if (gx_right_eye_buffers(&r_color, &r_depth) && s_queue_used + 1 <= QUEUE_BUDGET) {
+    // Stereo: the right eye gets its own copy only for screen-spanning
+    // copies (right_eye_wanted below); see the note above GXCopyTex (bug 38).
+    bool eyes = false;
+    u8 *r_color = NULL, *r_depth = NULL;
+    if (right_eye_wanted(W, H, &eyes, &r_color, &r_depth) && s_queue_used + 1 <= QUEUE_BUDGET) {
         if (e->has_r && (e->tex_r.width != tw || e->tex_r.height != th)) {
             free_later(&e->tex_r);
             memset(&e->tex_r, 0, sizeof(e->tex_r));
@@ -501,8 +536,10 @@ void GXCopyTex(void* dest, GXBool clear) {
             }
             PROF_COUNT("gx.copytex_right", 1);
         }
-    } else if (gx_right_eye_buffers(&r_color, &r_depth)) {
+    } else if (right_eye_wanted(W, H, &eyes, &r_color, &r_depth)) {
         PROF_COUNT("gx.copytex_right_over_budget", 1);
+    } else if (eyes) {
+        PROF_COUNT("gx.copytex_right_2d", 1);
     }
 
     // Texture coordinates: u follows framebuffer columns (EFB y, reversed),
