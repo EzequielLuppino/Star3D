@@ -955,13 +955,31 @@ static void dump_tex(const C3D_Tex* t, int n) {
 
 static void water_tess_frame_begin(void);  // gx_render.c: water tess pool reset
 
+// Stall breakdown of gx_render_frame_begin ("render begin" in the gx_init.c
+// stall finder): SD syscalls in here (the dump triggers) can block for
+// seconds while the log writer holds the SD card busy. Logged per phase when
+// the whole begin takes over 250 ms, so a stall names its exact cause.
+static const char* const s_rtb_name[9] = { "prologue", "water", "cfg",  "dump", "census",
+                                           "bufs",     "tex",    "copy", "dl" };
+static u64 s_rtb_ms[9];
+static u64 s_rtb_t0;
+static void rtb_mark(int ph) {
+    u64 t = svcGetSystemTick();
+    if (ph >= 0 && ph < 9) s_rtb_ms[ph] += t - s_rtb_t0;
+    s_rtb_t0 = t;
+}
+
 void gx_render_frame_begin(void) {
+    memset(s_rtb_ms, 0, sizeof(s_rtb_ms));
+    s_rtb_t0 = svcGetSystemTick();
     PROF_COUNT("c3d.unif_vec4", g_c3d_unif_stats[0]);
     PROF_COUNT("c3d.unif_vec4_skipped", g_c3d_unif_stats[1]);
     PROF_COUNT("c3d.unif_bool_skipped", g_c3d_unif_stats[2]);
     memset(g_c3d_unif_stats, 0, sizeof(g_c3d_unif_stats));
+    rtb_mark(1);
     water_tess_frame_begin();  // Pool/slots full last frame: safe to reset now
     s_discard = false;
+    rtb_mark(2);
     // Switches the touch UI can change while the game runs
     {
         static unsigned gen;
@@ -991,6 +1009,7 @@ void gx_render_frame_begin(void) {
         }
     }
     s_frame_number++;
+    rtb_mark(3);
     update_convergence();
     if (s_dumping && s_dbg_hold && !s_cap_dump) {
         // Hold the dumped frame on screen so a screenshot matches the dump's indices
@@ -1005,10 +1024,11 @@ void gx_render_frame_begin(void) {
     }
     s_dumping = false;
     s_cap_dump = false;
-    // The trigger is checked once a second; if it contains a frame number,
-    // that frame is dumped instead of the next one
+    // The trigger is checked once every 5 s; if it contains a frame number,
+    // that frame is dumped instead of the next one. (Rare SD access from the
+    // render thread: throttled, the log writer can hold the card for seconds)
     static u32 s_dump_at;
-    if (s_frame_number % 60 == 0 && !s_dump_at) {
+    if (s_frame_number % 300 == 0 && !s_dump_at) {
         FILE* f = fopen(DUMP_TRIGGER, "r");
         if (f) {
             unsigned long at = 0;
@@ -1029,6 +1049,7 @@ void gx_render_frame_begin(void) {
         LOG_INFO("dump", "=== frame %lu capture ID pass ===", (unsigned long)s_frame_number);
     }
     census_frame_begin();
+    rtb_mark(4);
     // This frame's set; the other one belongs to the previous frame (GPU
     // pipelining). The set used two frames ago is done: C3D_FrameEnd of the
     // previous frame waited for it
@@ -1053,10 +1074,29 @@ void gx_render_frame_begin(void) {
 
     g_gx.dirty = GX_DIRTY_ALL;
     g_gx.posmtx_rows = (1u << 30) - 1;
+    rtb_mark(5);
     gx_tex_frame_begin();
+    rtb_mark(6);
     gx_copy_frame_begin();
     s_drawn = false;
+    rtb_mark(7);
     gx_dlcache_frame_stats();
+    rtb_mark(8);
+    u64 rtb_tot = svcGetSystemTick() - s_rtb_t0;
+    rtb_mark(-1);
+    if (rtb_tot > (u64)(SYSCLOCK_ARM11 / 1000) * 250) {
+        LOG_WARN("stall", "render begin %lu ms: %s %lu, %s %lu, %s %lu, %s %lu, %s %lu, %s %lu, %s %lu, %s %lu, %s %lu",
+                 (unsigned long)(rtb_tot / (SYSCLOCK_ARM11 / 1000)), s_rtb_name[0],
+                 (unsigned long)(s_rtb_ms[0] / (SYSCLOCK_ARM11 / 1000)), s_rtb_name[1],
+                 (unsigned long)(s_rtb_ms[1] / (SYSCLOCK_ARM11 / 1000)), s_rtb_name[2],
+                 (unsigned long)(s_rtb_ms[2] / (SYSCLOCK_ARM11 / 1000)), s_rtb_name[3],
+                 (unsigned long)(s_rtb_ms[3] / (SYSCLOCK_ARM11 / 1000)), s_rtb_name[4],
+                 (unsigned long)(s_rtb_ms[4] / (SYSCLOCK_ARM11 / 1000)), s_rtb_name[5],
+                 (unsigned long)(s_rtb_ms[5] / (SYSCLOCK_ARM11 / 1000)), s_rtb_name[6],
+                 (unsigned long)(s_rtb_ms[6] / (SYSCLOCK_ARM11 / 1000)), s_rtb_name[7],
+                 (unsigned long)(s_rtb_ms[7] / (SYSCLOCK_ARM11 / 1000)), s_rtb_name[8],
+                 (unsigned long)(s_rtb_ms[8] / (SYSCLOCK_ARM11 / 1000)));
+    }
 }
 
 // --- Vertex layouts --------------------------------------------------------------

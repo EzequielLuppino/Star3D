@@ -159,7 +159,9 @@ void gx_copy_dump_dir(const char* dir) {
 
 void gx_copy_frame_begin(void) {
     s_frame++;
-    if (s_frame % 60 == 30 && remove(COPYDUMP_TRIGGER) == 0) {
+    // Throttled like the gxdump check (gx_render.c): an SD syscall on the
+    // render thread blocks for seconds while the log writer holds the card
+    if (s_frame % 300 == 30 && remove(COPYDUMP_TRIGGER) == 0) {
         gx_gpu_wait_idle();  // The copies of the last frame, finished
         gx_copy_dump_all();
     }

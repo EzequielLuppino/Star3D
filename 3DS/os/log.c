@@ -35,6 +35,8 @@ static LightEvent s_writer_ev;
 static Thread s_writer;
 static volatile bool s_writer_quit;
 static u32 s_dropped;
+static volatile bool s_flush_now;   // A warning wants the commit now
+static u64 s_last_flush;            // Ticks of the last fflush (slow commits)
 
 // Appends to the ring; caller holds log_lock
 static void ring_put(const char* p, u32 len) {
@@ -81,7 +83,18 @@ static void writer_main(void* arg) {
         u64 t0 = svcGetSystemTick();
         u32 bytes = s_head - s_tail;
         drain_ring();
-        if (log_file) fflush(log_file);
+        // Each fflush forces an SD commit that stalls the card for seconds,
+        // and every game DVD read issued during it waits behind it (the
+        // frame pacing hitches around the log writes). Commit at most every
+        // 10 s, or when a warning asked for it; the crash handler, the
+        // shutdown and the event-driven log_flush callers still commit
+        // everything themselves.
+        bool flush = s_flush_now || t0 - s_last_flush >= 10 * SYSCLOCK_ARM11;
+        if (flush) {
+            if (log_file) fflush(log_file);
+            s_last_flush = t0;
+            s_flush_now = false;
+        }
         u64 ms = (svcGetSystemTick() - t0) / (SYSCLOCK_ARM11 / 1000);
         LightLock_Unlock(&s_file_lock);
         // Slow SD writes (BFDF5C33 HW: 3 s frame stalls every ~13 s, SD or not?)
@@ -251,7 +264,10 @@ void log_vwrite(LogLevel level, const char* tag, const char* fmt, va_list args) 
     }
 
     LightLock_Unlock(&log_lock);
-    if (wake && s_writer) LightEvent_Signal(&s_writer_ev);
+    if (wake && s_writer) {
+        if (level >= LOG_LEVEL_WARN) s_flush_now = true;  // Problems go out at once
+        LightEvent_Signal(&s_writer_ev);
+    }
     if (full) {
         // The writer fell behind: write the ring out here
         log_flush();

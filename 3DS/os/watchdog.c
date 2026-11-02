@@ -70,7 +70,12 @@ static void watchdog_entry(void* arg) {
         }
         last_frame = frame;
         last_calls = calls;
-        log_flush();
+        // Flush rarely (every 5th check, ~10 s): each commit stalls the SD
+        // card for seconds and delays every game DVD read issued during it
+        // (frame pacing hitches). The writer flushes on warnings, and the
+        // crash handler and the stuck-path exit above flush everything.
+        static unsigned flushes;
+        if (++flushes % 5 == 0) log_flush();
     }
 }
 
