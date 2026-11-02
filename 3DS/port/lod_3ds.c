@@ -41,6 +41,9 @@ static CensusObj* census_find(const void* obj) {
 // range comes from the object's placement (cullDistance2 = placement byte
 // << 3); objects past it aren't drawn, and the last 100 units fade out.
 // Scaled ranges stay at least 140 so nearby objects (and the fade band) stay
+// S3D_LOD (Settings > Object distance, see port_obj_range): High (2, default)
+// keeps the ranges, Mid (1) halves them, Low (0) keeps 30%, on top of
+// S3D_OBJ_DIST and independent of the grass settings.
 // Plants: DLL 685 (SoftBody: grass clumps, flowers, bulrushes) and 687 (fern
 // trees). The hub has ~180 of them. All plants of a kind sway with one shared
 // animation phase (685.c), yet each one is skinned on its own every frame.
@@ -98,8 +101,9 @@ float port_obj_range(const void* obj, const char* name, int def_id, int class_id
         return 0.0f;
     }
     dist_store(obj, d);
-    static int pct = -1;
+    static int pct = -1, lod = -1;
     CFG_LIVE(pct, cfg_int("S3D_OBJ_DIST", 100));
+    CFG_LIVE(lod, cfg_int("S3D_LOD", 2));
     if (s_census_state == 2 && s_census_n < CENSUS_MAX && !census_find(obj)) {
         CensusObj* c = &s_census[s_census_n++];
         c->obj = obj;
@@ -114,8 +118,14 @@ float port_obj_range(const void* obj, const char* name, int def_id, int class_id
         c->range = range;
         c->sz = -1.0f;
     }
-    if (pct != 100) {
-        float r = range * (float)pct / 100.0f;
+    if (pct != 100 || lod != 2) {
+        // S3D_LOD (Settings > Object distance): how far objects are drawn,
+        // independent of Grass quality. High (2, default) keeps the ranges,
+        // Mid (1) halves them, Low (0) keeps 30%. Multiplies S3D_OBJ_DIST;
+        // scaled ranges stay at least 140 so nearby objects (and the fade
+        // band) stay
+        float k = (float)pct / 100.0f * (lod == 2 ? 1.0f : lod == 1 ? 0.5f : 0.3f);
+        float r = range * k;
         if (r < 140.0f) r = range < 140.0f ? range : 140.0f;
         range = r;
     }

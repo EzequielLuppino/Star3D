@@ -59,6 +59,10 @@ static int cheat_health, cheat_magic, cheat_money, cheat_giant, cheat_tiny, chea
 // flowers), Off = no plants
 static const int grass_quality_choices[] = { 2, 1, 0, INT32_MIN };
 static const char* const grass_quality_names[] = { "Off", "Low", "High" };
+// S3D_LOD (Settings > Object distance): High = the game's full draw ranges,
+// Mid = half, Low = 30%, independent of the grass settings
+static const int obj_lod_choices[] = { 2, 1, 0, INT32_MIN };
+static const char* const obj_lod_names[] = { "Low", "Mid", "High" };
 static const int fur_choices[] = { 1, 2, 0, INT32_MIN };
 static const char* const fur_names[] = { "Off", "Cutscene", "Always" };
 static const int anim_lod_choices[] = { 1, 2, 0, INT32_MIN };
@@ -132,6 +136,7 @@ static const Row settings_rows[] = {
     { "Fur layer budget", ROW_BOOL, "S3D_FUR_BUDGET", 1, .advanced = true },
     { "Fur", ROW_CHOICE, "S3D_FUR_MODE", 1, fur_choices, fur_names },
     { "Grass quality", ROW_CHOICE, "S3D_GRASS_QUALITY", 2, grass_quality_choices, grass_quality_names },
+    { "Object distance", ROW_CHOICE, "S3D_LOD", 2, obj_lod_choices, obj_lod_names },
     { "Water ripples", ROW_BOOL, "S3D_WATER_WARP", 1, .advanced = true },
     { "Caustics", ROW_BOOL, "S3D_CAUSTIC_WARP", 1, .advanced = true },
     { "Heat haze", ROW_BOOL, "S3D_SCREEN_WARP", 1, .advanced = true },
