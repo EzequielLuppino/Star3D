@@ -20,11 +20,6 @@
 #include "profiler.h"
 #include "matcache_3ds.h"
 
-// The material hash of the CURRENT shadow state (the sampled words over
-// the mask regions): a hit whose stored material equals the applied one
-// skips the restore (the state is already correct - the common case when
-// the consecutive draws share the material)
-u32 matcache_shadow_hash(void);
 
 // The game's stage counters (shader_dolphin.c)
 extern int gRcpNumTevStages, gRcpNumTexGens, gRcpNumIndStages;
@@ -93,19 +88,42 @@ u32 port_mat_setup(void* obj, void* m, void* am, u32 bs_pos, const void* bs_data
     CFG_LIVE(on, cfg_int("S3D_MAT_CACHE", 0));
     if (!on || !g_map_loaded) return 0xFFFFFFFFu;  // The title/attract scenes stay uncached
     u32 key_hash = bs_hash(bs_data, bs_pos);
-    uintptr_t o = (uintptr_t)obj;
-    u32 pair = ((o >> 4) ^ (o >> 12) ^ (o >> 20)) & 127;
-    for (int w = 0; w < 2; w++) {
-        MatEntry* e = &s_entries[pair * 2 + w];
-        if (e->used && e->obj == obj && e->m == m && e->am == am && e->bs_pos == bs_pos && e->bs_hash == key_hash &&
+    for (int i = 0; i < 256; i++) {
+        MatEntry* e = &s_entries[i];
+        if (!e->used) continue;
+        if (e->obj == obj && e->m == m && e->am == am && e->bs_pos == bs_pos && e->bs_hash == key_hash &&
             e->anim == anim && e->lights == lights) {
             e->last_used = prof_frame_count();
             gxrec_delta_restore(&e->state);
-            PROF_COUNT("mat.restores", 1);
             rcp_load(e);
             s_last_advance = e->advance;
             PROF_COUNT("mat.hits", 1);
             return e->idx;
+        }
+    }
+    // The miss diagnostic: against this object's own entry, which key part
+    // changed? (same instruction content + differing anim/lights = the
+    // fixable inputs; a differing hash = the instructions themselves moved)
+    {
+        bool same_bs = false, diff_anim = false, diff_lights = false;
+        for (int i = 0; i < 256; i++) {
+            MatEntry* e = &s_entries[i];
+            if (!e->used) continue;
+            if (e->obj == obj && e->m == m && e->am == am && e->bs_pos == bs_pos) {
+                if (e->bs_hash == key_hash) {
+                    same_bs = true;
+                    if (e->anim != anim) diff_anim = true;
+                    if (e->lights != lights) diff_lights = true;
+                }
+            }
+        }
+        if (same_bs) {
+            PROF_COUNT("mat.miss_samebs", 1);
+            if (diff_anim) PROF_COUNT("mat.miss_anim", 1);
+            if (diff_lights) PROF_COUNT("mat.miss_lights", 1);
+            if (!diff_anim && !diff_lights) PROF_COUNT("mat.miss_stable", 1);
+        } else {
+            PROF_COUNT("mat.miss_other", 1);
         }
     }
     PROF_COUNT("mat.misses", 1);
@@ -118,13 +136,18 @@ u32 port_mat_setup(void* obj, void* m, void* am, u32 bs_pos, const void* bs_data
 u32 port_mat_end(void* obj, void* m, void* am, u32 bs_pos, const void* bs_data, void* anim, int lights,
                  u32 idx, u32 advance) {
     u32 key_hash = bs_hash(bs_data, bs_pos);
-    uintptr_t o = (uintptr_t)obj;
-    u32 pair = ((o >> 4) ^ (o >> 12) ^ (o >> 20)) & 127;
-    MatEntry* slot = &s_entries[pair * 2];
-    if (slot->used && s_entries[pair * 2 + 1].used == 0) slot = &s_entries[pair * 2 + 1];
-    else if (slot->used && s_entries[pair * 2 + 1].used &&
-             s_entries[pair * 2 + 1].last_used < slot->last_used)
-        slot = &s_entries[pair * 2 + 1];
+    MatEntry* slot = NULL;
+    u32 oldest = 0xFFFFFFFFu;
+    for (int i = 0; i < 256; i++) {
+        if (!s_entries[i].used) {
+            slot = &s_entries[i];
+            break;
+        }
+        if (s_entries[i].last_used < oldest) {
+            oldest = s_entries[i].last_used;
+            slot = &s_entries[i];
+        }
+    }
     slot->used = 1;
     slot->obj = obj;
     slot->m = m;
