@@ -6,18 +6,27 @@
 # with the object's renderAlpha. Crash shadows (type 3) already use the same
 # path.
 1i\
+#include "main/mm.h"\
 _Bool port_shadow_decals(void);
 s|^            objShadowRender(entries\[i\]\.arg0\.object, 0, 0, framesThisStep);$|            if (port_shadow_decals()) {\
                 ObjModel\* fhModel = Obj_GetActiveModel(entries[i].arg0.object);\
-                \*\(u8\*\)\(\(u8\*\)fhModel->groundShadowVerts \+ 0x18\) = 0;\
-                objDrawGroundShadow(entries[i].arg0.object, fhModel);\
+                if (fhModel != NULL) {\
+                    if (fhModel->groundShadowVerts == NULL) fhModel->groundShadowVerts = mmAlloc(0x19, 0x18, 0);\
+                    if (fhModel->groundShadowVerts != NULL) {\
+                        \*\(u8\*\)\(\(u8\*\)fhModel->groundShadowVerts \+ 0x18\) = 0;\
+                        objDrawGroundShadow(entries[i].arg0.object, fhModel);\
+                    }\
+                }\
             } else {\
                 objShadowRender(entries[i].arg0.object, 0, 0, framesThisStep);\
             }|
 s|^        if (shadow != NULL && shadow->shadowCastSlot != NULL)$|        if (shadow != NULL \&\& (port_shadow_decals() ? obj->anim.modelInstance->shadowType != OBJ_SHADOW_TYPE_NONE : shadow->shadowCastSlot != NULL))|
 s|^            objShadowRender(obj, 0, 0, framesThisStep);$|            if (port_shadow_decals()) {\
-                \*\(u8\*\)\(\(u8\*\)model->groundShadowVerts \+ 0x18\) = 0;\
-                objDrawGroundShadow(obj, model);\
+                if (model->groundShadowVerts == NULL) model->groundShadowVerts = mmAlloc(0x19, 0x18, 0);\
+                if (model->groundShadowVerts != NULL) {\
+                    \*\(u8\*\)\(\(u8\*\)model->groundShadowVerts \+ 0x18\) = 0;\
+                    objDrawGroundShadow(obj, model);\
+                }\
             } else {\
                 objShadowRender(obj, 0, 0, framesThisStep);\
             }|
