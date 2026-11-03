@@ -1,5 +1,8 @@
 // Attract movie playback from build-time ETC1 frames (see movie_3ds.h and the
-// .v3d layout in tools/video_convert.py).
+// .v3d layout in tools/video_convert.py). The stored frame size comes from the
+// .v3d header (256x128 with the default VIDEO_SCALE=1 build, 512x256 with
+// VIDEO_SCALE=0); the game's quad stretches it back, so playback is the same
+// either way, just softer at half size.
 //
 // The game's player is unchanged: it reads THP frames, decodes their audio and
 // calls THPVideoDecode with the frame's JPEG and its Y/U/V buffers. The JPEG is
@@ -7,7 +10,7 @@
 // + 1"), and the pre-encoded frame is read into a linear-memory ETC1 texture
 // owned by the Y buffer (one per texture set the game cycles through). The
 // next frame is prefetched on the worker core, so the call usually costs one
-// 64 KB memcpy.
+// frame-size memcpy (16 KB at the default VIDEO_SCALE=1, 64 KB at full size).
 //
 // Without a .v3d (builds without Pillow/texconv) aurora's software decoder
 // runs instead; in the 3DS build that outputs black frames (thp_compat.hpp).

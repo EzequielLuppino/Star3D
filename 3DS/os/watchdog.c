@@ -13,6 +13,8 @@
 
 volatile const char* g_last_stub = "(none)";
 volatile u32 g_stub_calls;
+volatile u32 g_wd_obj_defno;
+extern volatile u32 g_log_commit_active;
 volatile const char* g_wd_phase[THREAD_SLOTS] = { "startup", "(not started)", "(not started)" };
 
 static Thread watchdog_thread;
@@ -21,6 +23,49 @@ static volatile bool watchdog_running;
 #define POLL_NS   (100ULL * 1000 * 1000)
 #define POLLS_PER_CHECK ((int)(WATCHDOG_PERIOD_NS / POLL_NS))
 
+// The game runs on the main thread (main.c calls gameMain directly); the
+// watchdog reads its saved context while it is stuck (same process, so the
+// context svc may be allowed). 0 = capture failed or not permitted.
+static Handle s_game_thread;
+
+static inline Result svc_get_thread_context(ThreadContext* ctx, Handle thread) {
+    register u32 r0 asm("r0") = (u32)(uintptr_t)ctx;
+    register u32 r1 asm("r1") = thread;
+    asm volatile("svc 0x3B" : "+r"(r0) : "r"(r1) : "r2", "r3", "r12", "memory");
+    return r0;
+}
+
+static void dump_game_context(void) {
+    if (!s_game_thread) return;
+    ThreadContext ctx;
+    Result rc = svc_get_thread_context(&ctx, s_game_thread);
+    if (R_FAILED(rc)) {
+        LOG_WARN("watchdog", "GetThreadContext(game): 0x%08lX", (unsigned long)rc);
+        s_game_thread = 0;
+        return;
+    }
+    CpuRegisters* c = &ctx.cpu_registers;
+    LOG_WARN("watchdog",
+             "game ctx: pc %08lX lr %08lX sp %08lX cpsr %08lX | r0 %08lX r1 %08lX r2 %08lX r3 %08lX r4 %08lX r5 "
+             "%08lX r12 %08lX",
+             (unsigned long)c->pc, (unsigned long)c->lr, (unsigned long)c->sp, (unsigned long)c->cpsr,
+             (unsigned long)c->r[0], (unsigned long)c->r[1], (unsigned long)c->r[2], (unsigned long)c->r[3],
+             (unsigned long)c->r[4], (unsigned long)c->r[5], (unsigned long)c->r[12]);
+    // Stack words: return addresses into .text show the call chain, as in the
+    // crash handler (crash.c)
+    u32 sp = c->sp & ~3u;
+    for (int row = 0; row < 10; row++) {
+        u32 addr = sp + row * 16;
+        MemInfo mi;
+        PageInfo pi;
+        if (R_FAILED(svcQueryMemory(&mi, &pi, addr)) || (mi.perm & MEMPERM_READ) == 0 || mi.state == MEMSTATE_FREE)
+            break;
+        const u32* w = (const u32*)addr;
+        LOG_WARN("watchdog", "game stack %08lX: %08lX %08lX %08lX %08lX", (unsigned long)addr, (unsigned long)w[0],
+                 (unsigned long)w[1], (unsigned long)w[2], (unsigned long)w[3]);
+    }
+}
+
 // No GPU register read here: on hardware (bug 12), GSPGPU_ReadHWRegs while
 // the GPU hung froze the system (the log stopped right after the call, in two
 // runs, once from a separate thread). S3D_GPU_TRACE finds the hanging draw instead.
@@ -28,6 +73,9 @@ static volatile bool watchdog_running;
 static void watchdog_entry(void* arg) {
     (void)arg;
     crash_install_handler();
+    // Its own TLS slot: WD_PHASE writes from here (log_flush) must not clobber
+    // the game thread's phase, which names the stall
+    t_thread_slot = THREAD_SLOT_HELPER;
     unsigned int last_frame = prof_frame_count();
     u32 last_calls = g_stub_calls;
     int stalled_checks = 0;
@@ -59,11 +107,13 @@ static void watchdog_entry(void* arg) {
             void* running_fn;
             worker_debug_state(&queued, &running_ms, &running_fn);
             LOG_WARN("watchdog", "no frame for %d s (stuck at frame %u) in \"%s\": last stub %s, %lu stub calls since last check; "
-                     "worker: %lu queued, %s%p for %lu ms; render thread: \"%s\"",
+                     "worker: %lu queued, %s%p for %lu ms; render thread: \"%s\"; log commit: %s; last obj defNo %lu",
                      stalled_checks * 2, frame, (const char*)g_wd_phase[THREAD_SLOT_GAME], (const char*)g_last_stub,
                      (unsigned long)(calls - last_calls), (unsigned long)queued,
                      running_fn ? "running " : "idle ", running_fn, (unsigned long)running_ms,
-                     (const char*)g_wd_phase[THREAD_SLOT_RENDER]);
+                     (const char*)g_wd_phase[THREAD_SLOT_RENDER],
+                     g_log_commit_active ? "active" : "idle", (unsigned long)g_wd_obj_defno);
+            dump_game_context();
             if (stalled_checks == 3) LOG_WARN("watchdog", "hold START+SELECT to quit");
         } else {
             stalled_checks = 0;
@@ -74,12 +124,15 @@ static void watchdog_entry(void* arg) {
         // card for seconds and delays every game DVD read issued during it
         // (frame pacing hitches). The writer flushes on warnings, and the
         // crash handler and the stuck-path exit above flush everything.
+        // Never while stalled: the flush would block this thread behind the
+        // writer's commit and hide the next stall check.
         static unsigned flushes;
-        if (++flushes % 5 == 0) log_flush();
+        if (stalled_checks == 0 && ++flushes % 5 == 0) log_flush();
     }
 }
 
 void watchdog_start(void) {
+    s_game_thread = threadGetHandle(NULL);  // The main thread: the game runs on it
     watchdog_running = true;
     watchdog_thread = threadCreate(watchdog_entry, NULL, 0x2000, WATCHDOG_PRIORITY, -2, false);
     if (!watchdog_thread) {

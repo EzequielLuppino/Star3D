@@ -27,6 +27,7 @@
 #include "log.h"
 #include "port_3ds.h"
 #include "profiler.h"
+#include "watchdog.h"
 #include "worker.h"
 
 #define AI_DMA_RATE    32028   // GameCube AI DMA sample rate (stereo s16)
@@ -306,7 +307,12 @@ static void stream_close(void) {
     }
     for (int i = 0; i < STREAM_SLOTS; i++) sSlots[i].state = SLOT_FREE;
     LightLock_Unlock(&sStreamLock);
-    if (sStreamFile) fclose(sStreamFile);
+    if (sStreamFile) {
+        volatile const char* phase = g_main_phase;
+        WD_PHASE("audio: stream fclose");
+        fclose(sStreamFile);
+        g_main_phase = phase;
+    }
     sStreamFile = NULL;
     LightLock_Unlock(&sStreamIoLock);
 }
@@ -422,12 +428,18 @@ int fhAIPrepareStream(void* fileInfoPtr) {
             return 0;
         }
     }
-    FILE* file = fopen(path, "rb");
+    FILE* file;
+    {
+        volatile const char* phase = g_main_phase;
+        WD_PHASE("audio: stream fopen");
+        file = fopen(path, "rb");
+        if (file) setvbuf(file, NULL, _IONBF, 0);
+        g_main_phase = phase;
+    }
     if (!file) {
         LOG_ERROR("audio", "cannot open stream %s", path);
         return 0;
     }
-    setvbuf(file, NULL, _IONBF, 0);
     LightLock_Lock(&sStreamIoLock);
     sStreamFile = file;
     sStreamLength = fileInfo->length;
@@ -504,7 +516,12 @@ void fhAIPump(void) {
     stream_pump();
     movie_audio_pump();
     static u32 frames;
-    if (++frames % 300 == 0) {
+    static u64 last_stats;
+    u64 now_t = svcGetSystemTick();
+    // Frame-based, but a 1 fps crawl would never print it: also print when
+    // 20 s passed (the tick cost shows if the ndsp thread is the preemptor)
+    if (++frames % 300 == 0 || now_t - last_stats >= 20 * SYSCLOCK_ARM11) {
+        last_stats = now_t;
         port_musyx_log_stats();
         if (sStreamActive)
             LOG_DEBUG("audio", "stream at %.1f s, volume %d/%d", sStreamSamplesPlayed / (float)STREAM_RATE,

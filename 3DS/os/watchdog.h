@@ -21,5 +21,8 @@ extern volatile u32 g_stub_calls;
 extern volatile const char* g_wd_phase[THREAD_SLOTS];
 #define g_main_phase (g_wd_phase[t_thread_slot])
 #define WD_PHASE(name) (g_main_phase = (name))
+// Last object whose update started (set in patches/main/object.c.sed), for
+// naming the object that blocks Obj_UpdateAllObjects
+extern volatile u32 g_wd_obj_defno;
 
 #endif // WATCHDOG_H

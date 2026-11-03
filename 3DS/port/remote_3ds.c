@@ -32,6 +32,7 @@
 #include "log.h"
 #include "remote_3ds.h"
 #include "savestate_3ds.h"
+#include "watchdog.h"
 
 void warpToMap(int idx, s8 transType);
 void touchui_remote_import(const char* args);
@@ -68,8 +69,13 @@ static u16 parse_keys(const char* s) {
 }
 
 static void read_file(void) {
+    volatile const char* phase = g_main_phase;
+    WD_PHASE("remote: cmd poll");
     FILE* f = fopen(CMD_FILE, "r");
-    if (!f) return;
+    if (!f) {
+        g_main_phase = phase;
+        return;
+    }
     char line[64];
     s_count = s_next = 0;
     bool swallow = false;  // Skipping the rest of a long comment line
@@ -96,6 +102,7 @@ static void read_file(void) {
     }
     fclose(f);
     remove(CMD_FILE);
+    g_main_phase = phase;
 }
 
 // findclr ADDR: objects whose active model's GX_VA_CLR0 array is ADDR (or all

@@ -4,6 +4,8 @@
 #include <string.h>
 #include <sys/iosupport.h>
 #include <sys/stat.h>
+#include "profiler.h"
+#include "watchdog.h"
 
 static FILE* log_file = NULL;
 static LightLock log_lock;
@@ -37,6 +39,8 @@ static volatile bool s_writer_quit;
 static u32 s_dropped;
 static volatile bool s_flush_now;   // A warning wants the commit now
 static u64 s_last_flush;            // Ticks of the last fflush (slow commits)
+// 1 = a thread is inside a log fflush (an SD commit); the watchdog reports it
+volatile u32 g_log_commit_active;
 
 // Appends to the ring; caller holds log_lock
 static void ring_put(const char* p, u32 len) {
@@ -64,7 +68,7 @@ static void drain_ring(void) {
             rename(LOG_FILE_PATH, LOG_FILE_OLD);
             log_file = fopen(LOG_FILE_PATH, "w");
             if (!log_file) return;
-            setvbuf(log_file, NULL, _IOFBF, 32 * 1024);
+            setvbuf(log_file, NULL, _IOFBF, 1024);
             log_bytes = fprintf(log_file, "[log rotated at frame %u, earlier lines are in %s]%c", log_frame,
                                 LOG_FILE_OLD, '\n');
         }
@@ -91,7 +95,11 @@ static void writer_main(void* arg) {
         // everything themselves.
         bool flush = s_flush_now || t0 - s_last_flush >= 10 * SYSCLOCK_ARM11;
         if (flush) {
+            g_log_commit_active = 1;
+            __dmb();
             if (log_file) fflush(log_file);
+            __dmb();
+            g_log_commit_active = 0;
             s_last_flush = t0;
             s_flush_now = false;
         }
@@ -127,9 +135,9 @@ void log_init(void) {
     if (rename(LOG_FILE_PATH, LOG_FILE_PREV) != 0) rename(LOG_FILE_LEGACY, LOG_FILE_PREV);
     remove(LOG_FILE_LEGACY);
     log_file = fopen(LOG_FILE_PATH, "w");
-    // Large stdio buffer: SD card writes are slow, flushes happen on warnings,
-    // every 2 s (watchdog) and in the crash handler
-    if (log_file) setvbuf(log_file, NULL, _IOFBF, 32 * 1024);
+    // Small stdio buffer: the fs module wedges on 32 KB buffered writes (bug
+    // 40, the capture writer's fix), so SD write calls stay at 1 KB
+    if (log_file) setvbuf(log_file, NULL, _IOFBF, 1024);
     log_ready = true;
     log_start_writer();
 
@@ -165,10 +173,17 @@ void log_shutdown(void) {
 
 void log_flush(void) {
     if (!log_ready) return;
+    volatile const char* phase = g_main_phase;
+    WD_PHASE("log: flush");
     LightLock_Lock(&s_file_lock);
+    g_log_commit_active = 1;
+    __dmb();
     drain_ring();
     if (log_file) fflush(log_file);
+    __dmb();
+    g_log_commit_active = 0;
     LightLock_Unlock(&s_file_lock);
+    g_main_phase = phase;
 }
 
 void log_kick(void) {

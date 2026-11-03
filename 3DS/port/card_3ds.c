@@ -10,6 +10,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include "log.h"
+#include "watchdog.h"
 
 #define CARD_DIR      "sdmc:/3ds/star3d/card"
 #define CARD_SECTOR   0x2000
@@ -220,18 +221,23 @@ static s32 transfer(const CARDFileInfo* fi, void* buf, s32 length, s32 offset, b
         return CARD_RESULT_NOFILE;
     char path[96];
     path_for(path, sizeof(path), sNames[fi->fileNo], ".bin");
+    volatile const char* phase = g_main_phase;
+    WD_PHASE("card: io");
     FILE* f = fopen(path, write ? "r+b" : "rb");
-    if (!f) return CARD_RESULT_NOFILE;
     s32 result = CARD_RESULT_READY;
-    if (fseek(f, offset, SEEK_SET) != 0) {
-        result = CARD_RESULT_IOERROR;
-    } else if (write) {
-        if (fwrite(buf, 1, length, f) != (size_t)length) result = CARD_RESULT_IOERROR;
-    } else {
-        size_t got = fread(buf, 1, length, f);
-        if (got < (size_t)length) memset((u8*)buf + got, 0, length - got);
+    if (!f) result = CARD_RESULT_NOFILE;
+    else {
+        if (fseek(f, offset, SEEK_SET) != 0) {
+            result = CARD_RESULT_IOERROR;
+        } else if (write) {
+            if (fwrite(buf, 1, length, f) != (size_t)length) result = CARD_RESULT_IOERROR;
+        } else {
+            size_t got = fread(buf, 1, length, f);
+            if (got < (size_t)length) memset((u8*)buf + got, 0, length - got);
+        }
+        fclose(f);
     }
-    fclose(f);
+    g_main_phase = phase;
     return result;
 }
 

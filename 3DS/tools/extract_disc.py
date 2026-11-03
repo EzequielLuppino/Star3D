@@ -107,6 +107,7 @@ def conversion_options():
         "tex_mipmaps": os.environ.get("TEX_MIPMAPS", "1") != "0",
         "tex_scale": int(os.environ.get("TEX_SCALE", "0") or 0),
         "video": video_convert.available() and os.environ.get("VIDEO_CONVERT", "1") != "0",
+        "video_scale": int(os.environ.get("VIDEO_SCALE", "1") or 0),
         "meshsimp": bool(mesh_lib) and os.path.isfile(mesh_lib),
         "poly_reduce": int(os.environ.get("POLY_REDUCE", "50") or 0),
         "poly_max_error": float(os.environ.get("POLY_MAX_ERROR", "0.05") or 0.05),

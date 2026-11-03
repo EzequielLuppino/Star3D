@@ -138,6 +138,11 @@ shows the options of the game data in use (`game data: ...` near the top).
 `build.bat mesh-check` / `./build.sh mesh-check` checks the reduced files
 against the disc (only display lists changed, every asset still present).
 
+- `VIDEO_SCALE`: the attract movie's frames are stored at half resolution by
+  default (256x128 ETC1 instead of 512x256, a quarter of the bytes: the .v3d
+  shrinks from ~118 MB to ~29 MB; the top screen is 240p, well below the full
+  size). `VIDEO_SCALE=0` keeps the full 512x256 frames.
+
 ### Output
 
 - Docker: `out/star3d.3dsx`, `out/star3d.cia` and `out/star3d.elf` (symbols,

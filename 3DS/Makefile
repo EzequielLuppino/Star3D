@@ -240,6 +240,11 @@ TEX_MIPMAPS ?= 1
 # textures' full mip 0 is rarely resolved; halving them keeps the look while
 # cutting texture traffic to a quarter.
 TEX_SCALE ?= 1
+# Build-time movie downscaling: VIDEO_SCALE=1 (default) stores the attract
+# movie frames at 256x128 instead of 512x256 (quarter of the frame bytes, so
+# the .v3d shrinks from ~118 MB to ~29 MB; the 240p screen is well below the
+# full size). 0 = 512x256.
+VIDEO_SCALE ?= 1
 # Build-time polygon reduction of models and map blocks (tools/mesh_reduce.py,
 # tools/native/meshsimp.c): POLY_REDUCE = percent of triangles removed per
 # display list (0 = off: full polygon models), POLY_MAX_ERROR = largest
@@ -256,7 +261,7 @@ CONVERT_SCRIPTS := tools/extract_disc.py tools/audio_convert.py tools/tex_conver
                    tools/mesh_reduce.py tools/native/texconv.c tools/native/meshsimp.c
 # Re-extracts when a conversion option changes (the file only changes then)
 CONVERT_OPTIONS := $(BUILD_ROOT)/host/convert_options.txt
-CONVERT_OPTIONS_TEXT := TEX_QUALITY=$(TEX_QUALITY) TEX_MIPMAPS=$(TEX_MIPMAPS) TEX_SCALE=$(TEX_SCALE) POLY_REDUCE=$(POLY_REDUCE) POLY_MAX_ERROR=$(POLY_MAX_ERROR)
+CONVERT_OPTIONS_TEXT := TEX_QUALITY=$(TEX_QUALITY) TEX_MIPMAPS=$(TEX_MIPMAPS) TEX_SCALE=$(TEX_SCALE) VIDEO_SCALE=$(VIDEO_SCALE) POLY_REDUCE=$(POLY_REDUCE) POLY_MAX_ERROR=$(POLY_MAX_ERROR)
 
 # CIA title (GRAPHICS_PLAN.md 1.3)
 APP_UNIQUE_ID := 0xF5FA0
@@ -304,7 +309,7 @@ $(ROMFS_STAMP): $(ISO) $(CONVERT_SCRIPTS) $(TEXCONV_LIB) $(MESHSIMP_LIB) $(CONVE
 		exit 1; \
 	fi
 	TEXCONV_LIB="$(if $(TEXCONV_LIB),$(abspath $(TEXCONV_LIB)))" TEX_QUALITY=$(TEX_QUALITY) TEX_MIPMAPS=$(TEX_MIPMAPS) \
-		TEX_SCALE=$(TEX_SCALE) MESHSIMP_LIB="$(if $(MESHSIMP_LIB),$(abspath $(MESHSIMP_LIB)))" POLY_REDUCE=$(POLY_REDUCE) \
+		TEX_SCALE=$(TEX_SCALE) VIDEO_SCALE=$(VIDEO_SCALE) MESHSIMP_LIB="$(if $(MESHSIMP_LIB),$(abspath $(MESHSIMP_LIB)))" POLY_REDUCE=$(POLY_REDUCE) \
 		POLY_MAX_ERROR=$(POLY_MAX_ERROR) $(PYTHON) -I tools/extract_disc.py "$(ISO)" $(ROMFS_DIR)
 
 $(CONVERT_OPTIONS): FORCE

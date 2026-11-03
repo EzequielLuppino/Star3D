@@ -21,8 +21,103 @@
 #include "profiler.h"
 #include "savestate_3ds.h"
 #include "snapmem_3ds.h"
+#include "watchdog.h"
 
 #define DIAG_PERIOD 600  // ~10 s at 60 Hz retrace
+
+// --- Slow-call logger ---------------------------------------------------------
+// Game code (via patches) wraps calls that should be fast with
+// port_slow_enter/exit (balanced pairs). Any call that takes over 5 ms is
+// logged with its name, duration and an optional count, and the watchdog
+// phase always names the innermost call currently running, so a stall inside
+// one is reported directly.
+#define SLOW_STACK 24
+#define SLOW_US_LIMIT 5000
+static const char* s_slow_name[SLOW_STACK];
+static u64 s_slow_t0[SLOW_STACK];
+static int s_slow_n[SLOW_STACK];
+static int s_slow_depth;
+static u32 s_slow_hits;
+static volatile int s_slow_note_v = -1, s_slow_note_a = -1;
+static volatile int s_slow_sum;
+static volatile int s_slow_ptr_v, s_slow_ptr_a;
+
+// Records values the game code knows about; the next slow log reports them.
+// note2 keeps the LARGEST v seen (a huge loop count wins over later small
+// cells), add accumulates per-iteration counts
+void port_slow_note2(int v, int a) {
+    if (v > s_slow_note_v) {
+        s_slow_note_v = v;
+        s_slow_note_a = a;
+    }
+}
+
+void port_slow_add(int v) {
+    s_slow_sum += v;
+}
+
+void port_slow_ptrs(int a, int b) {
+    s_slow_ptr_v = a;
+    s_slow_ptr_a = b;
+}
+
+void port_slow_enter_n(const char* name, int n) {
+    if (s_slow_depth < SLOW_STACK) {
+        s_slow_name[s_slow_depth] = name;
+        s_slow_t0[s_slow_depth] = svcGetSystemTick();
+        s_slow_n[s_slow_depth] = n;
+    }
+    s_slow_depth++;
+    WD_PHASE(name);
+}
+
+void port_slow_enter(const char* name) {
+    port_slow_enter_n(name, -1);
+}
+
+void port_slow_exit(const char* name) {
+    // Pop only when the name matches the innermost open region: wraps around
+    // conditional blocks (e.g. the reset-object loop only runs for some query
+    // masks) leave their exit without an enter, and those are ignored
+    if (s_slow_depth > 0 && s_slow_name[s_slow_depth - 1] == name) {
+        s_slow_depth--;
+        if (s_slow_depth < SLOW_STACK) {
+            u64 us = (svcGetSystemTick() - s_slow_t0[s_slow_depth]) / CPU_TICKS_PER_USEC;
+            if (us > SLOW_US_LIMIT) {
+                s_slow_hits++;
+                int nv = s_slow_note_v, na = s_slow_note_a, sum = s_slow_sum, pv = s_slow_ptr_v, pa = s_slow_ptr_a;
+                s_slow_note_v = s_slow_note_a = -1;
+                s_slow_sum = 0;
+                // 2 ms of tick reads on this thread: gaps name preemption by
+                // a higher-priority thread on this core
+                u64 t0 = svcGetSystemTick(), prev = t0, now = t0, stolen = 0;
+                u32 gaps = 0;
+                const u64 gap = (u64)5 * CPU_TICKS_PER_USEC;
+                while (now - t0 < 2 * 1000 * CPU_TICKS_PER_USEC) {
+                    now = svcGetSystemTick();
+                    u64 d = now - prev;
+                    if (d > gap) {
+                        stolen += d;
+                        gaps++;
+                    }
+                    prev = now;
+                }
+                if (s_slow_n[s_slow_depth] >= 0) {
+                    LOG_WARN("slow", "%s took %lu ms (n %d, max %d/%d, sum %d, ptr %08X/%d, stolen %lu%% %lu gaps, hit %lu)",
+                             name, (unsigned long)(us / 1000), s_slow_n[s_slow_depth], nv, na, sum, (unsigned)pv, pa,
+                             (unsigned long)(stolen * 100 / (now - t0)), (unsigned long)gaps,
+                             (unsigned long)s_slow_hits);
+                } else {
+                    LOG_WARN("slow", "%s took %lu ms (max %d/%d, sum %d, ptr %08X/%d, stolen %lu%% %lu gaps, hit %lu)",
+                             name, (unsigned long)(us / 1000), nv, na, sum, (unsigned)pv, pa,
+                             (unsigned long)(stolen * 100 / (now - t0)), (unsigned long)gaps,
+                             (unsigned long)s_slow_hits);
+                }
+            }
+        }
+        if (s_slow_depth > 0) WD_PHASE(s_slow_name[s_slow_depth - 1]);
+    }
+}
 
 static u32 s_frames, s_marks;
 static u32 s_vram_min = 0xFFFFFFFF;  // VRAM free low-water mark, sampled every 60 frames

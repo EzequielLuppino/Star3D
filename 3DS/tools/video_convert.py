@@ -27,6 +27,7 @@ in the scan before handing a frame to Pillow.
   frames: frame i at first frame offset + i * frame size (128-byte aligned)
 """
 import ctypes
+import functools
 import io
 import multiprocessing
 import os
@@ -35,9 +36,18 @@ import sys
 
 V3D_MAGIC = b"V3D1"
 V3D_HEADER_SIZE = 64
-FRAME_W, FRAME_H = 512, 256  # 4:3 movie stretched into one texture; the quad maps it back
+FULL_W, FULL_H = 512, 256  # 4:3 movie stretched into one texture; the quad maps it back
 GPU_ETC1 = 0xC
-FRAME_BYTES = FRAME_W * FRAME_H // 2
+
+
+def frame_dims():
+    """Stored frame size: VIDEO_SCALE=1 (default) halves 512x256 to 256x128,
+    VIDEO_SCALE=0 keeps the full size (0.25x / 1x the source pixels)."""
+    w, h = FULL_W, FULL_H
+    if int(os.environ.get("VIDEO_SCALE", "1") or 0) > 0:
+        w >>= 1
+        h >>= 1
+    return w, h
 
 try:
     from PIL import Image
@@ -138,7 +148,7 @@ def _worker_init(lib_path):
                                           ctypes.c_uint32, ctypes.c_char_p]
 
 
-def _encode_frame(jpeg):
+def _encode_frame(fw, fh, jpeg):
     """JPEG bytes -> (ETC1 frame bytes or None, PSNR, hash)."""
     if jpeg is None:
         return None, 0.0, 0
@@ -151,8 +161,8 @@ def _encode_frame(jpeg):
         img = img.convert("RGBA")
     except Exception:
         return None, 0.0, h
-    out = ctypes.create_string_buffer(FRAME_BYTES)
-    psnr = _lib.tc_encode_frame_etc1(img.tobytes(), img.width, img.height, FRAME_W, FRAME_H, out)
+    out = ctypes.create_string_buffer(fw * fh // 2)
+    psnr = _lib.tc_encode_frame_etc1(img.tobytes(), img.width, img.height, fw, fh, out)
     if psnr < 0:
         return None, 0.0, h
     return out.raw, psnr, h
@@ -172,11 +182,13 @@ def convert_thp(path, data, log=None):
         log(f"{path}: no video component")
         return {}
 
+    fw, fh = frame_dims()
+    frame_bytes = fw * fh // 2
     jobs = max(1, (os.cpu_count() or 1))
     with multiprocessing.Pool(jobs, _worker_init, (_lib_path(),)) as pool:
-        results = pool.map(_encode_frame, video_frames(data, hdr), chunksize=8)
+        results = pool.map(functools.partial(_encode_frame, fw, fh), video_frames(data, hdr), chunksize=8)
 
-    black = bytes(FRAME_BYTES)  # All-zero ETC1 blocks decode to black
+    black = bytes(frame_bytes)  # All-zero ETC1 blocks decode to black
     frames, hashes, failed, worst, prev = [], [], 0, 99.0, black
     for frame, psnr, h in results:
         hashes.append(h)
@@ -190,14 +202,14 @@ def convert_thp(path, data, log=None):
 
     table_off = V3D_HEADER_SIZE
     frames_off = (table_off + 4 * len(frames) + 127) & ~127
-    header = struct.pack("<4sIIfIIIIIIIII", V3D_MAGIC, V3D_HEADER_SIZE, len(frames), hdr["fps"], FRAME_W, FRAME_H,
-                         GPU_ETC1, FRAME_BYTES, hdr["width"], hdr["height"], failed, table_off, frames_off)
+    header = struct.pack("<4sIIfIIIIIIIII", V3D_MAGIC, V3D_HEADER_SIZE, len(frames), hdr["fps"], fw, fh,
+                         GPU_ETC1, frame_bytes, hdr["width"], hdr["height"], failed, table_off, frames_off)
     header += bytes(V3D_HEADER_SIZE - len(header))
     header += struct.pack("<%dI" % len(hashes), *hashes)
     header += bytes(frames_off - len(header))
     out_path = os.path.splitext(path)[0] + ".v3d"
     log(f"{path}: {len(frames)} frames {hdr['width']}x{hdr['height']} @ {hdr['fps']:.2f} fps -> {out_path} "
-        f"({FRAME_W}x{FRAME_H} ETC1, {len(frames) * FRAME_BYTES // (1024 * 1024)} MB, worst PSNR {worst:.1f} dB, "
+        f"({fw}x{fh} ETC1, {len(frames) * frame_bytes // (1024 * 1024)} MB, worst PSNR {worst:.1f} dB, "
         f"{failed} frames failed to decode)")
     if failed == len(frames):
         log(f"{path}: no frame decoded, movie left unconverted")
