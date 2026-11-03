@@ -279,6 +279,10 @@ static void stream_thread(void* arg) {
     }
 }
 
+Handle port_audio_stream_thread_handle(void) {
+    return sStreamThread ? threadGetHandle(sStreamThread) : 0;
+}
+
 static void stream_init(void) {
     static bool done;
     if (done) return;

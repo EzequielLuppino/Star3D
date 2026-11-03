@@ -1,6 +1,7 @@
 #include "log.h"
 #include <3ds.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/iosupport.h>
 #include <sys/stat.h>
@@ -119,6 +120,10 @@ static void log_start_writer(void) {
     if (!s_writer) LOG_WARN("log", "no log writer thread: writing on the calling threads");
 }
 
+Handle log_writer_thread_handle(void) {
+    return s_writer ? threadGetHandle(s_writer) : 0;
+}
+
 void log_init(void) {
     if (log_ready) return;
 
@@ -134,10 +139,13 @@ void log_init(void) {
     remove(LOG_FILE_OLD);
     if (rename(LOG_FILE_PATH, LOG_FILE_PREV) != 0) rename(LOG_FILE_LEGACY, LOG_FILE_PREV);
     remove(LOG_FILE_LEGACY);
-    log_file = fopen(LOG_FILE_PATH, "w");
-    // Small stdio buffer: the fs module wedges on 32 KB buffered writes (bug
-    // 40, the capture writer's fix), so SD write calls stay at 1 KB
-    if (log_file) setvbuf(log_file, NULL, _IOFBF, 1024);
+    const char* sd = getenv("S3D_LOG_SD");
+    if (!sd || atoi(sd) != 0) {
+        log_file = fopen(LOG_FILE_PATH, "w");
+        // Small stdio buffer: the fs module wedges on 32 KB buffered writes (bug
+        // 40, the capture writer's fix), so SD write calls stay at 1 KB
+        if (log_file) setvbuf(log_file, NULL, _IOFBF, 1024);
+    }
     log_ready = true;
     log_start_writer();
 

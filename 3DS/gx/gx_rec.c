@@ -930,6 +930,10 @@ static bool start_thread(void) {
     return true;
 }
 
+Handle render_thread_handle(void) {
+    return s_thread ? threadGetHandle(s_thread) : 0;
+}
+
 // Suspend (HOME menu), sleep and exit hand the GPU to the system inside
 // aptMainLoop, which the game thread calls while an overlapped frame may still
 // be replaying: finish it first. aptHook puts this hook in front of citro3d's.

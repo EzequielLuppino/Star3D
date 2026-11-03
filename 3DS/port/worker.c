@@ -121,6 +121,10 @@ void worker_shutdown(void) {
 
 int worker_core(void) { return s_core; }
 
+Handle worker_thread_handle(void) {
+    return s_thread ? threadGetHandle(s_thread) : 0;
+}
+
 void worker_submit(WorkerJob* job, WorkerFn fn, void* arg) {
     job->fn = fn;
     job->arg = arg;
