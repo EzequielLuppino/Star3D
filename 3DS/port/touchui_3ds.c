@@ -33,9 +33,11 @@
 #include "watchdog.h"
 
 #define SETTINGS_FILE "sdmc:/3ds/star3d/settings.txt"
-// Version 2 (new defaults, hidden advanced rows): files written before it are
-// ignored once, so everyone starts from the new defaults
-#define SETTINGS_VERSION 2
+// Version 3 (2026-11-04 defaults: 30 FPS cap off, shadows High, object
+// distance Low, 3D: faster on, depth follows Fox off, strength 30, close-up
+// limit Flat): files written before it are ignored once, so everyone starts
+// from the new defaults
+#define SETTINGS_VERSION 3
 
 enum { TAB_SETTINGS, TAB_MAP, TAB_CHEATS, TAB_COUNT };
 enum { ROW_BOOL, ROW_CHOICE, ROW_LOG, ROW_ACTION, ROW_CHEAT, ROW_INFO, ROW_SLOTS, ROW_FPS };
@@ -141,10 +143,10 @@ static const Row settings_rows[] = {
     { "FPS", ROW_FPS },
     // Defaults here must match the ones where the switch is read (the first
     // cfg_* lookup of a name fixes its default)
-    { "30 FPS cap", ROW_BOOL, "S3D_FPS_CAP30", 1 },
+    { "30 FPS cap", ROW_BOOL, "S3D_FPS_CAP30", 0 },
     { "Adaptive frame pacing", ROW_BOOL, "S3D_FRAME_PACE_ADAPTIVE", 1 },
     { "Render thread", ROW_CHOICE, "S3D_RENDER_THREAD", 2, rt_choices, rt_names, .advanced = true },
-    { "Shadows", ROW_CHOICE, "S3D_SHADOW_MODE", 1, shadow_mode_choices, shadow_mode_names },
+    { "Shadows", ROW_CHOICE, "S3D_SHADOW_MODE", 2, shadow_mode_choices, shadow_mode_names },
     { "Far animation LOD", ROW_CHOICE, "S3D_ANIM_LOD", 2, anim_lod_choices, anim_lod_names, .advanced = true },
     { "Back-face culling", ROW_BOOL, "S3D_CULL", 1, .advanced = true },
     { "Fog", ROW_BOOL, "S3D_FOG", 1 },
@@ -154,18 +156,18 @@ static const Row settings_rows[] = {
     { "Fur layer budget", ROW_BOOL, "S3D_FUR_BUDGET", 1, .advanced = true },
     { "Fur", ROW_CHOICE, "S3D_FUR_MODE", 1, fur_choices, fur_names },
     { "Grass quality", ROW_CHOICE, "S3D_GRASS_QUALITY", 2, grass_quality_choices, grass_quality_names },
-    { "Object distance", ROW_CHOICE, "S3D_LOD", 2, obj_lod_choices, obj_lod_names },
+    { "Object distance", ROW_CHOICE, "S3D_LOD", 0, obj_lod_choices, obj_lod_names },
     { "Water ripples", ROW_BOOL, "S3D_WATER_WARP", 1, .advanced = true },
     { "Caustics", ROW_BOOL, "S3D_CAUSTIC_WARP", 1, .advanced = true },
     { "Heat haze", ROW_BOOL, "S3D_SCREEN_WARP", 1, .advanced = true },
     { "Depth of field blur", ROW_BOOL, "S3D_GPU_BLUR", 1 },
     // S3D_STEREO_REDUCED: half the fur and grass layers and no blur while the
     // 3D slider is up. S3D_STEREO_AUTOCONV: the screen depth follows Fox
-    { "3D: faster (fewer effects)", ROW_BOOL, "S3D_STEREO_REDUCED", 0 },
-    { "3D: depth follows Fox", ROW_BOOL, "S3D_STEREO_AUTOCONV", 1 },
-    { "3D: strength", ROW_CHOICE, "S3D_STEREO_SEP_X1000", 25, sep_choices, sep_names },
+    { "3D: faster (fewer effects)", ROW_BOOL, "S3D_STEREO_REDUCED", 1 },
+    { "3D: depth follows Fox", ROW_BOOL, "S3D_STEREO_AUTOCONV", 0 },
+    { "3D: strength", ROW_CHOICE, "S3D_STEREO_SEP_X1000", 30, sep_choices, sep_names },
     { "3D: screen depth", ROW_CHOICE, "S3D_STEREO_CONV", 80, conv_choices, conv_names },
-    { "3D: close-up limit", ROW_CHOICE, "S3D_STEREO_CLAMP", 2, clamp_choices, clamp_names },
+    { "3D: close-up limit", ROW_CHOICE, "S3D_STEREO_CLAMP", 0, clamp_choices, clamp_names },
     // S3D_STEREO_AUTO: the slider also switches the whole quality profile -
     // the cut-effects config with the slider up, the boot settings with it
     // down (port/stereo_auto_3ds.c)

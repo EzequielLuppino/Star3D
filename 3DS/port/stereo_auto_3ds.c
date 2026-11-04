@@ -32,9 +32,9 @@ typedef struct {
 // quality row (S3D_PLANTS stays as set), instead of being hidden in 3D.
 static const ProfileKey s_profile[] = {
     { "S3D_SHADOWS", 0, 1 },
-    // The menu's Shadows row (S3D_SHADOW_MODE) overrides S3D_SHADOWS, so 3D
-    // cuts it too (boot_default -1 = unset: back to the old switches)
-    { "S3D_SHADOW_MODE", 0, -1 },
+    // The menu's Shadows row (S3D_SHADOW_MODE, default High = 2) overrides
+    // S3D_SHADOWS, so 3D cuts it too (boot_default 2 = the new default)
+    { "S3D_SHADOW_MODE", 0, 2 },
     { "S3D_FUR_MODE", 0, 1 },
     // Grass passes are off by default (no visual impact); env.txt may raise
     // S3D_GRASS_BUDGET, which the 3D profile then still cuts

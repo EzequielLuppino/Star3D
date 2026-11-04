@@ -41,7 +41,8 @@ static CensusObj* census_find(const void* obj) {
 // range comes from the object's placement (cullDistance2 = placement byte
 // << 3); objects past it aren't drawn, and the last 100 units fade out.
 // Scaled ranges stay at least 140 so nearby objects (and the fade band) stay
-// S3D_LOD (Settings > Object distance, see port_obj_range): High (2, default)
+// S3D_LOD (Settings > Object distance, see port_obj_range): Low (0, default)
+// 30% of the game's draw ranges, Mid (1) half, High (2) the full ranges.
 // keeps the ranges, Mid (1) halves them, Low (0) keeps 30%, on top of
 // S3D_OBJ_DIST and independent of the grass settings.
 // Plants: DLL 685 (SoftBody: grass clumps, flowers, bulrushes) and 687 (fern
@@ -111,7 +112,7 @@ float port_obj_range(const void* obj, const char* name, int def_id, int class_id
     dist_store(obj, d);
     static int pct = -1, lod = -1;
     CFG_LIVE(pct, cfg_int("S3D_OBJ_DIST", 100));
-    CFG_LIVE(lod, cfg_int("S3D_LOD", 2));
+    CFG_LIVE(lod, cfg_int("S3D_LOD", 0));
     if (s_census_state == 2 && s_census_n < CENSUS_MAX && !census_find(obj)) {
         CensusObj* c = &s_census[s_census_n++];
         c->obj = obj;

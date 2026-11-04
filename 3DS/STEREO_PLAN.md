@@ -23,9 +23,9 @@ x_clip += eye * sep * (w - conv)
 ```
 
 `w = -z_view` is the clip w, `sep` the parallax at infinity per eye (in clip-x
-units, 0.025 at the full slider by default), `conv` the zero-parallax distance
-(80 world units by default, eased toward the camera-to-Fox distance by
-`S3D_STEREO_AUTOCONV`, clamped 20-400).
+units, 0.03 at the full slider by default), `conv` the zero-parallax distance
+(80 world units by default; `S3D_STEREO_AUTOCONV` eases it toward the
+camera-to-Fox distance, clamped 20-400, off by default).
 
 In screen pixels the parallax of a point at distance z is
 
@@ -33,11 +33,11 @@ In screen pixels the parallax of a point at distance z is
 P(z) = 2 * sep * (1 - conv/z) * hw        (hw = half the screen width, 200)
 ```
 
-- Background, z -> infinity: P -> 2 * sep * hw = **10 px** at the full slider
-  (2.5% of the 400-px screen, a deliberately conservative "divergence budget").
+- Background, z -> infinity: P -> 2 * sep * hw = **12 px** at the full slider
+  (3% of the 400-px screen, a deliberately conservative "divergence budget").
 - z = conv: 0 (the screen plane).
 - z < conv: P goes negative (crossed, pops out) and **grows like 1/z** with
-  no bound: at z = 4 with conv = 80 it is `(1 - 80/4) * 10 = -190 px`.
+  no bound: at z = 4 with conv = 80 it is `(1 - 80/4) * 12 = -228 px`.
 
 That unbounded foreground is the bug. Even the minimum auto-convergence (20)
 leaves 40 px of crossed parallax at z = 4; menus routinely get closer than
@@ -51,7 +51,7 @@ The knobs and the industry-standard budget they are set with:
 1. **Eye separation / interaxial ("strength").** Sets the parallax at
    infinity: `2 * sep * hw` pixels. On an autostereoscopic 3DS display this
    must stay small (the parallax-barrier sweet spot is tiny): ~2-3% of the
-   screen width is comfortable. Default 25e-3 clip units = 10 px = 2.5%.
+   screen width is comfortable. Default 30e-3 clip units = 12 px = 3%.
    The 3D slider scales it globally and stays the player's comfort valve.
 2. **Convergence ("screen depth").** The distance whose pixels have zero
    parallax. Convention: track the subject, i.e. what the player looks at.
@@ -85,7 +85,7 @@ x_clip += eye * sep * max(w - conv, -C * w)
 |-------|-----|---------|
 | 0     | 0   | Flat: nothing pops out, close objects sit on the screen |
 | 1     | 0.5 | Gentle |
-| 2     | 1.0 | Safe (default): foreground <= background depth |
+| 2     | 1.0 | Safe: foreground <= background depth |
 | 3     | 1.5 | Extra pop-out |
 | 4     | 1e6 | No limit (the old behaviour, kept for A/B) |
 
@@ -133,9 +133,9 @@ word budget rechecked.
 
 | Row | Switch | Values | Default |
 |-----|--------|--------|---------|
-| 3D: strength | `S3D_STEREO_SEP_X1000` | 15 Soft, 20 Low, 25 Normal, 30 Strong, 40 Max (clip units x1000) | 25 |
+| 3D: strength | `S3D_STEREO_SEP_X1000` | 15 Soft, 20 Low, 25 Normal, 30 Strong, 40 Max (clip units x1000) | 30 |
 | 3D: screen depth | `S3D_STEREO_CONV` | 40 Near, 60 Close, 80 Normal, 120 Far, 160 Distant (world units) | 80 |
-| 3D: close-up limit | `S3D_STEREO_CLAMP` | Safe, Extra, Gentle, Flat, No limit | Safe (2) |
+| 3D: close-up limit | `S3D_STEREO_CLAMP` | Safe, Extra, Gentle, Flat, No limit | Flat (0) |
 
 All three are live (apply within a frame, saved to settings.txt, overridable
 from env.txt). Note: with "3D: depth follows Fox" on, the screen depth value

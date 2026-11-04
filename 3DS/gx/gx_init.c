@@ -307,7 +307,7 @@ static void setup_big_target(void) {
         (u8*)big_target->frameBuf.colorBuf + C3D_CalcColorBufSize(240, 400, GPU_RB_RGBA8);
     C3D_RenderTargetSetOutput(right_target, GFX_TOP, GFX_RIGHT, DISPLAY_TRANSFER_FLAGS);
     gfxSet3D(true);
-    stereo_sep = cfg_int("S3D_STEREO_SEP_X1000", 25) / 1000.0f;
+    stereo_sep = cfg_int("S3D_STEREO_SEP_X1000", 30) / 1000.0f;
     LOG_INFO("gx", "stereo 3D ready (separation %.3f, convergence %d)", stereo_sep, cfg_int("S3D_STEREO_CONV", 80));
 }
 
@@ -766,12 +766,12 @@ void gx_frame_begin_slider(float slider) {
         static int pace = -1;
         static u64 last_begin;
         CFG_LIVE(pace, cfg_bool("S3D_FRAME_PACE_ADAPTIVE", true) ? 1 : 0);
-        // 30 FPS cap (touch UI setting S3D_FPS_CAP30, on by default): citro3d's frame sync
+        // 30 FPS cap (touch UI setting S3D_FPS_CAP30, off by default): citro3d's frame sync
         // then waits for every second VBlank, which evens out frame times in
         // areas that cannot hold 60
         static int cap30 = -1;
         int prev_cap = cap30;
-        CFG_LIVE(cap30, cfg_bool("S3D_FPS_CAP30", true) ? 1 : 0);
+        CFG_LIVE(cap30, cfg_bool("S3D_FPS_CAP30", false) ? 1 : 0);
         if (cap30 != prev_cap) C3D_FrameRate(cap30 ? 30.0f : 60.0f);
         u64 now = svcGetSystemTick();
         bool slow = pace && last_begin && now - last_begin >= (u64)(SYSCLOCK_ARM11 / (cap30 ? 30 : 60));
@@ -824,7 +824,7 @@ void gx_frame_begin_slider(float slider) {
     g_fb_h = game_fb_h();
     frame_stereo = stereo;
     // S3D_STEREO_SEP_X1000 is live (Settings > 3D: strength)
-    CFG_LIVE(stereo_sep, cfg_int("S3D_STEREO_SEP_X1000", 25) / 1000.0f);
+    CFG_LIVE(stereo_sep, cfg_int("S3D_STEREO_SEP_X1000", 30) / 1000.0f);
     frame_sep = slider * stereo_sep;
     gx_render_set_stereo(stereo, frame_sep);
     gx_render_frame_begin();
@@ -1909,10 +1909,10 @@ bool gx_right_eye_buffers(u8** color, u8** depth) {
 // Shadows (touch UI setting S3D_SHADOW_MODE, patches/main/lightmap.c.sed).
 // S3D_SHADOW_MODE: -1 = unset (fall back to the S3D_SHADOWS on/off and
 // S3D_SHADOW_DECALS switches), 0 = Off, 1 = Low (decals), 2 = High (the
-// game's projected shadows and caster render-to-texture passes)
+// game's projected shadows and caster render-to-texture passes; default)
 int port_shadow_mode(void) {
     static int mode = -2;
-    CFG_LIVE(mode, cfg_int("S3D_SHADOW_MODE", -1));
+    CFG_LIVE(mode, cfg_int("S3D_SHADOW_MODE", 2));
     return mode;
 }
 

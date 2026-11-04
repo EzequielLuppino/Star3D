@@ -171,8 +171,8 @@ static C3D_Mtx s_eye_proj[2];
 // instead of blowing up. s_eye_stereo[e] = (eye*sep, -conv, -C, 0); all zeros
 // in mono / ortho / with the close-up limit off (C large: no clamp)
 static float s_eye_stereo[2][4];
-// S3D_STEREO_CLAMP levels -> C: 0 flat (no pop-out), 1 gentle (0.5x),
-// 2 safe (1x, default), 3 extra (1.5x), 4 unlimited (old behaviour)
+// S3D_STEREO_CLAMP levels -> C: 0 flat (no pop-out, default), 1 gentle (0.5x),
+// 2 safe (1x), 3 extra (1.5x), 4 unlimited (old behaviour)
 static const float s_eye_clamp_c[5] = { 0.0f, 0.5f, 1.0f, 1.5f, 1e6f };
 static float s_eye_c = 1.0f;       // The current C
 static int s_scissor[4];           // Left, top, right, bottom of one eye
@@ -293,10 +293,10 @@ void gx_render_init(void) {
     s_eye_y[1] = flipped ? 0 : 400;
     s_eye_conv = (float)cfg_int("S3D_STEREO_CONV", 80);
     s_eye_swap = cfg_bool("S3D_STEREO_SWAP", false);
-    s_eye_autoconv = cfg_bool("S3D_STEREO_AUTOCONV", true);
-    s_eye_reduced = cfg_bool("S3D_STEREO_REDUCED", false);
+    s_eye_autoconv = cfg_bool("S3D_STEREO_AUTOCONV", false);
+    s_eye_reduced = cfg_bool("S3D_STEREO_REDUCED", true);
     s_eye_hud = cfg_int("S3D_STEREO_HUD_X1000", 0) / 1000.0f;
-    int clamp = cfg_int("S3D_STEREO_CLAMP", 2);
+    int clamp = cfg_int("S3D_STEREO_CLAMP", 0);
     if (clamp < 0) clamp = 0;
     if (clamp > 4) clamp = 4;
     s_eye_c = s_eye_clamp_c[clamp];
@@ -1009,12 +1009,12 @@ void gx_render_frame_begin(void) {
             s_frag_light = cfg_bool("S3D_FRAG_LIGHT", true);
             s_vsh_lean = cfg_int("S3D_VSH_LEAN", 1);
             s_tex_res = cfg_int("S3D_TEX_RES", 0);
-            s_eye_autoconv = cfg_bool("S3D_STEREO_AUTOCONV", true);
-            s_eye_reduced = cfg_bool("S3D_STEREO_REDUCED", false);
+            s_eye_autoconv = cfg_bool("S3D_STEREO_AUTOCONV", false);
+            s_eye_reduced = cfg_bool("S3D_STEREO_REDUCED", true);
             // Screen depth: applies at once; with autoconvergence on it eases
             // back toward Fox over ~0.2 s (the switch is the start value)
             s_eye_conv = (float)cfg_int("S3D_STEREO_CONV", 80);
-            int clamp = cfg_int("S3D_STEREO_CLAMP", 2);
+            int clamp = cfg_int("S3D_STEREO_CLAMP", 0);
             if (clamp < 0) clamp = 0;
             if (clamp > 4) clamp = 4;
             s_eye_c = s_eye_clamp_c[clamp];
