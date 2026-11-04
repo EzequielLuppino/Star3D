@@ -85,6 +85,20 @@ static const char* const lod_names[] = { "0", NULL, "+0.5", NULL, "+1" };
 // S3D_DBG_MIP: sample every mipmapped texture at one level (debug)
 static const int mip_choices[] = { 0, 1, 2, 3, 4, 5, INT32_MIN };
 static const char* const mip_names[] = { "Off", "Level 0", "Level 1", "Level 2", "Level 3", "Level 4" };
+// S3D_STEREO_SEP_X1000 (3D strength): parallax at infinity at full slider
+static const int sep_choices[] = { 15, 20, 25, 30, 40, INT32_MIN };
+static const char* const sep_names[] = { [15] = "Soft", [20] = "Low", [25] = "Normal", [30] = "Strong",
+                                         [40] = "Max" };
+// S3D_STEREO_CONV (screen depth): the distance with zero parallax
+static const int conv_choices[] = { 40, 60, 80, 120, 160, INT32_MIN };
+static const char* const conv_names[] = { [40] = "Near", [60] = "Close", [80] = "Normal", [120] = "Far",
+                                          [160] = "Distant" };
+// S3D_STEREO_CLAMP (close-up limit, STEREO_PLAN.md): how much closer objects
+// may pop out than the background depth (0 = flat at the screen, 2 = the same
+// as the background, 4 = no limit, the old behaviour)
+static const int clamp_choices[] = { 2, 3, 1, 0, 4, INT32_MIN };
+static const char* const clamp_names[] = { [2] = "Safe", [3] = "Extra", [1] = "Gentle", [0] = "Flat",
+                                           [4] = "No limit" };
 
 static char s_status[48];
 static int s_status_frames;
@@ -149,6 +163,9 @@ static const Row settings_rows[] = {
     // 3D slider is up. S3D_STEREO_AUTOCONV: the screen depth follows Fox
     { "3D: faster (fewer effects)", ROW_BOOL, "S3D_STEREO_REDUCED", 0 },
     { "3D: depth follows Fox", ROW_BOOL, "S3D_STEREO_AUTOCONV", 1 },
+    { "3D: strength", ROW_CHOICE, "S3D_STEREO_SEP_X1000", 25, sep_choices, sep_names },
+    { "3D: screen depth", ROW_CHOICE, "S3D_STEREO_CONV", 80, conv_choices, conv_names },
+    { "3D: close-up limit", ROW_CHOICE, "S3D_STEREO_CLAMP", 2, clamp_choices, clamp_names },
     // S3D_STEREO_AUTO: the slider also switches the whole quality profile -
     // the cut-effects config with the slider up, the boot settings with it
     // down (port/stereo_auto_3ds.c)

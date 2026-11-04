@@ -14,11 +14,12 @@
 .fvec posscale        ; x: position scale (fixed-point inputs), y: normal input scale, z: texcoord scale
 .fvec texwarp         ; warp waves: xy = half the spatial frequency on object x + y / z + y,
                       ; zw = phases (half-periods / 2 + 0.5)
-.fvec lightpos[8]     ; view-space light positions; w: in channel 0's color light mask
-.fvec lightdir[8]     ; spot directions; w: in channel 0's alpha light mask
-.fvec lightcol[8]     ; light colors (0-1)
-.fvec lighta[8]       ; angle attenuation a0, a1, a2; w: specular (GX_AF_SPEC)
-.fvec lightk[8]       ; distance attenuation k0, k1, k2; w: diffuse clamp (1) or none (0)
+.fvec stereo          ; close-up clamp (STEREO_PLAN.md): x = eye*sep, y = -conv, z = -C, w = 0
+.fvec lightpos[7]     ; view-space light positions; w: in channel 0's color light mask
+.fvec lightdir[7]     ; spot directions; w: in channel 0's alpha light mask
+.fvec lightcol[7]     ; light colors (0-1)
+.fvec lighta[7]       ; angle attenuation a0, a1, a2; w: specular (GX_AF_SPEC)
+.fvec lightk[7]       ; distance attenuation k0, k1, k2; w: diffuse clamp (1) or none (0)
 .fvec matreg          ; channel 0 material register color (0-1)
 .fvec ambreg          ; channel 0 ambient register color (0-1)
 .fvec chansel         ; x: material from vertex (rgb), y: material from vertex (alpha),
@@ -46,6 +47,8 @@
 .alias  inv16384  myconst2.xxxx
 .alias  twos      myconst2.yyyy
 .alias  halfs     myconst2.zzzz
+.constf lightidx(2.0, 3.0, 4.0, 5.0)
+.constf lightidx2(6.0, 7.0, 0.0, 0.0)
 
 ; Outputs
 .out outpos position
@@ -75,11 +78,20 @@
 	dp4 r1.z, posmtx[a0.x+2], r0
 	mov r1.w, ones
 
-	; Clip-space position
-	dp4 outpos.x, projection[0], r1
-	dp4 outpos.y, projection[1], r1
-	dp4 outpos.z, projection[2], r1
-	dp4 outpos.w, projection[3], r1
+	; Clip-space position. Stereo (STEREO_PLAN.md): the parallax offset
+	; x += eye*sep*max(w - conv, -C*w) is applied per vertex, so a pixel
+	; nearer than conv/(1+C) keeps a parallax of at most C times the
+	; parallax at infinity instead of blowing up. stereo = (eye*sep, -conv,
+	; -C, 0): 0/0/0 in mono, ortho and with the close-up limit off
+	dp4 r13.x, projection[0], r1
+	dp4 r13.y, projection[1], r1
+	dp4 r13.z, projection[2], r1
+	dp4 r13.w, projection[3], r1
+	add r3.x, stereo.yyyy, r13.wwww   ; w - conv
+	mul r3.y, stereo.zzzz, r13.wwww   ; -C * w
+	max r3.x, r3.x, r3.y
+	mad r13.x, r3.xxxx, stereo.xxxx, r13.x
+	mov outpos, r13
 
 	; Fragment lighting inputs (gx_render.c apply_light_env): r12 = view
 	; vector, r11 = normal quaternion. Without fraglit, fragment lighting only
@@ -301,22 +313,24 @@
 		call onelight
 	.end
 	ifu lighten[2]
-		call light2
+		mova a0.y, lightidx.xxxx
+		call onelight
 	.end
 	ifu lighten[3]
-		call light3
+		mova a0.y, lightidx.yyyy
+		call onelight
 	.end
 	ifu lighten[4]
-		call light4
+		mova a0.y, lightidx.zzzz
+		call onelight
 	.end
 	ifu lighten[5]
-		call light5
+		mova a0.y, lightidx.wwww
+		call onelight
 	.end
 	ifu lighten[6]
-		call light6
-	.end
-	ifu lighten[7]
-		call light7
+		mova a0.y, lightidx2.xxxx
+		call onelight
 	.end
 
 	; out = material * (lit ? clamp(sum) : 1), per rgb / alpha
@@ -326,33 +340,6 @@
 	mul r9, litsel.xxxy, r9
 	add r9, ones, r9
 	mul outclr, r7, r9
-.end
-
-.constf lightidx(2.0, 3.0, 4.0, 5.0)
-.constf lightidx2(6.0, 7.0, 0.0, 0.0)
-.proc light2
-	mova a0.y, lightidx.xxxx
-	call onelight
-.end
-.proc light3
-	mova a0.y, lightidx.yyyy
-	call onelight
-.end
-.proc light4
-	mova a0.y, lightidx.zzzz
-	call onelight
-.end
-.proc light5
-	mova a0.y, lightidx.wwww
-	call onelight
-.end
-.proc light6
-	mova a0.y, lightidx2.xxxx
-	call onelight
-.end
-.proc light7
-	mova a0.y, lightidx2.yyyy
-	call onelight
 .end
 
 ; Add light a0.y to r8. r1 = position, r5 = normal.

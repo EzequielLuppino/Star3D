@@ -15,6 +15,7 @@
 .fvec posscale        ; x: position scale (fixed-point inputs), y: normal input scale, z: texcoord scale
 .fvec texwarp         ; warp waves: xy = half the spatial frequency on object x + y / z + y,
                       ; zw = phases (half-periods / 2 + 0.5)
+.fvec stereo          ; close-up clamp (STEREO_PLAN.md): x = eye*sep, y = -conv, z = -C, w = 0
 
 ; Same bool registers as default.v.pica (gx_init.c checks)
 .bool tcaff[3]        ; slot takes the affine path: q = 1, no divide (see default.v.pica)
@@ -27,6 +28,7 @@
 .constf myconst2(0.00006103515625, 2.0, 0.0, 0.0)
 .alias  inv16384  myconst2.xxxx
 .alias  twos      myconst2.yyyy
+.constf zunit(0.0, 0.0, 1.0, 0.0)
 
 ; Outputs
 .out outpos position
@@ -57,16 +59,24 @@
 	dp4 r1.z, posmtx[a0.x+2], r0
 	mov r1.w, ones
 
-	; Clip-space position
-	dp4 outpos.x, projection[0], r1
-	dp4 outpos.y, projection[1], r1
-	dp4 outpos.z, projection[2], r1
-	dp4 outpos.w, projection[3], r1
+	; Clip-space position. Stereo (STEREO_PLAN.md): the parallax offset
+	; x += eye*sep*max(w - conv, -C*w) is applied per vertex, so a pixel
+	; nearer than conv/(1+C) keeps a parallax of at most C times the
+	; parallax at infinity instead of blowing up. stereo = (eye*sep, -conv,
+	; -C, 0): 0/0/0 in mono, ortho and with the close-up limit off
+	dp4 r13.x, projection[0], r1
+	dp4 r13.y, projection[1], r1
+	dp4 r13.z, projection[2], r1
+	dp4 r13.w, projection[3], r1
+	add r3.x, stereo.yyyy, r13.wwww   ; w - conv
+	mul r3.y, stereo.zzzz, r13.wwww   ; -C * w
+	max r3.x, r3.x, r3.y
+	mad r13.x, r3.xxxx, stereo.xxxx, r13.x
+	mov outpos, r13
 
 	; Fragment lighting evaluates the fog: a light at the eye whose distance
 	; attenuation LUT holds the fog curve, so the view vector is (0, 0, eye z)
-	mov outview, zeros
-	mov outview.z, r1.z
+	mul outview, zunit, r1.zzzz
 	mov outnq, myconst.xxxy
 
 	; Vertex color 0-255 -> 0-1
@@ -75,7 +85,6 @@
 	; Indirect warp stand-in (water): r10.xy = sin(pi * a) of two travelling
 	; waves over object x and z, approximated as 4u(1 - |u|) on the wrapped
 	; angle u in [-1, 1); each slot adds texsrc.w * r10.xy after the divide
-	mov r10, zeros
 	; over x + y and z + y, so walls (x or z constant) ripple too (bug 33)
 	add r10.xy, r0.xz, r0.yy
 	mul r10.xy, texwarp.xy, r10.xy

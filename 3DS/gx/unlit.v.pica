@@ -13,6 +13,8 @@
 .fvec texmtx[9]       ; texture matrix (3 rows) for each of the 3 PICA texture slots
 .fvec texsrc[3]       ; per slot: x = texcoord attribute, y = position, z = normal
 .fvec posscale        ; x: position scale (fixed-point inputs), y: normal input scale, z: texcoord scale
+.fvec texwarp         ; unused here: keeps the shared register layout (default.v.pica)
+.fvec stereo          ; close-up clamp (STEREO_PLAN.md): x = eye*sep, y = -conv, z = -C, w = 0
 
 ; Same bool registers as default.v.pica (gx_init.c checks)
 .bool tcaff[3]        ; slot takes the affine path: q = 1, no divide (see default.v.pica)
@@ -22,6 +24,7 @@
 .alias  zeros     myconst.xxxx
 .alias  ones      myconst.yyyy
 .alias  inv255    myconst.zzzz
+.constf zunit(0.0, 0.0, 1.0, 0.0)
 
 ; Outputs
 .out outpos position
@@ -52,15 +55,23 @@
 	dp4 r1.z, posmtx[a0.x+2], r0
 	mov r1.w, ones
 
-	; Clip-space position
-	dp4 outpos.x, projection[0], r1
-	dp4 outpos.y, projection[1], r1
-	dp4 outpos.z, projection[2], r1
-	dp4 outpos.w, projection[3], r1
+	; Clip-space position. Stereo (STEREO_PLAN.md): the parallax offset
+	; x += eye*sep*max(w - conv, -C*w) is applied per vertex, so a pixel
+	; nearer than conv/(1+C) keeps a parallax of at most C times the
+	; parallax at infinity instead of blowing up. stereo = (eye*sep, -conv,
+	; -C, 0): 0/0/0 in mono, ortho and with the close-up limit off
+	dp4 r13.x, projection[0], r1
+	dp4 r13.y, projection[1], r1
+	dp4 r13.z, projection[2], r1
+	dp4 r13.w, projection[3], r1
+	add r3.x, stereo.yyyy, r13.wwww   ; w - conv
+	mul r3.y, stereo.zzzz, r13.wwww   ; -C * w
+	max r3.x, r3.x, r3.y
+	mad r13.x, r3.xxxx, stereo.xxxx, r13.x
+	mov outpos, r13
 
 	; Fog view vector (see default.v.pica)
-	mov outview, zeros
-	mov outview.z, r1.z
+	mul outview, zunit, r1.zzzz
 	mov outnq, myconst.xxxy
 
 	; Vertex color 0-255 -> 0-1

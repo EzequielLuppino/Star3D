@@ -138,7 +138,7 @@ static bool init_shader(void) {
     // of them; the others must place the ones they use at the same registers
     if (!gx_render_set_shader(shader_programs[GX_VSH_LIT].vertexShader)) return false;
     static const char* const shared[] = { "projection", "posmtx", "texmtx", "texsrc", "posscale", "texwarp",
-                                          "tcaff" };
+                                          "tcaff", "stereo" };
     // Bool b15 reads as set in vertex shaders on real hardware (lit models
     // drew their normals as color while nrmout sat there): keep it unused
     for (int v = 0; v < GX_VSH_COUNT; v++) {
@@ -823,6 +823,8 @@ void gx_frame_begin_slider(float slider) {
     g_fb_w = game_fb_w();
     g_fb_h = game_fb_h();
     frame_stereo = stereo;
+    // S3D_STEREO_SEP_X1000 is live (Settings > 3D: strength)
+    CFG_LIVE(stereo_sep, cfg_int("S3D_STEREO_SEP_X1000", 25) / 1000.0f);
     frame_sep = slider * stereo_sep;
     gx_render_set_stereo(stereo, frame_sep);
     gx_render_frame_begin();

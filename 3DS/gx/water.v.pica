@@ -27,6 +27,7 @@
                       ; zw = bias (the ripple's z <= 0, the game's wave_params
                       ; z in [0.5, 1.5)); wave mode: bug 33's wave frequencies
                       ; and phases + 2 (the marker, z > 2)
+.fvec stereo          ; close-up clamp (STEREO_PLAN.md): x = eye*sep, y = -conv, z = -C, w = 0
 
 ; Constants
 .constf myconst(0.0, 1.0, 0.00392156862745, 0.0)
@@ -35,6 +36,7 @@
 .alias  inv255    myconst.zzzz
 .constf myconst2(0.00006103515625, 2.0, 0.0, 0.0)
 .alias  twos      myconst2.yyyy
+.constf zunit(0.0, 0.0, 1.0, 0.0)
 
 ; Outputs
 .out outpos position
@@ -60,15 +62,24 @@
 	dp4 r1.z, posmtx[a0.x+2], r0
 	mov r1.w, ones
 
-	; Clip-space position
-	dp4 outpos.x, projection[0], r1
-	dp4 outpos.y, projection[1], r1
-	dp4 outpos.z, projection[2], r1
-	dp4 outpos.w, projection[3], r1
+	; Clip-space position. Stereo (STEREO_PLAN.md): the parallax offset
+	; x += eye*sep*max(w - conv, -C*w) is applied per vertex, so a pixel
+	; nearer than conv/(1+C) keeps a parallax of at most C times the
+	; parallax at infinity instead of blowing up. stereo = (eye*sep, -conv,
+	; -C, 0): identical to the other variants so pass 2 stays at depth EQUAL
+	; with pass 1
+	dp4 r13.x, projection[0], r1
+	dp4 r13.y, projection[1], r1
+	dp4 r13.z, projection[2], r1
+	dp4 r13.w, projection[3], r1
+	add r3.x, stereo.yyyy, r13.wwww   ; w - conv
+	mul r3.y, stereo.zzzz, r13.wwww   ; -C * w
+	max r3.x, r3.x, r3.y
+	mad r13.x, r3.xxxx, stereo.xxxx, r13.x
+	mov outpos, r13
 
 	; Fog through fragment lighting: view vector (0, 0, eye z), no normal
-	mov outview, zeros
-	mov outview.z, r1.z
+	mul outview, zunit, r1.zzzz
 	mov outnq, myconst.xxxy
 
 	; Vertex color 0-255 -> 0-1 (the split's combiners read only its alpha;

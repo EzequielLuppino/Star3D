@@ -146,6 +146,7 @@ static int s_loc_lightpos, s_loc_lightdir, s_loc_lightcol, s_loc_lighta, s_loc_l
 static int s_loc_matreg, s_loc_ambreg, s_loc_chansel, s_loc_litsel;
 static int s_loc_lighten, s_loc_lighting, s_loc_texsrc, s_loc_texwarp, s_loc_warpon, s_loc_fraglit, s_loc_nrmout;
 static int s_loc_tcaff;
+static int s_loc_stereo;
 
 // 2x2 rotation for the 3DS's sideways-mounted top screen
 static float s_tilt[2][2];
@@ -164,6 +165,16 @@ static float s_eye_focus = -1.0f;  // Latest camera-to-Fox distance (port_stereo
 static float s_eye_hud;            // S3D_STEREO_HUD_X1000: HUD parallax, fraction of s_eye_sep
 static int s_eye_y[2];             // Viewport y of each eye
 static C3D_Mtx s_eye_proj[2];
+// Close-up clamp (STEREO_PLAN.md): the vertex shader applies the parallax
+// offset x += eye*sep*max(w - conv, -C*w) per vertex, so a pixel nearer than
+// conv/(1+C) keeps a parallax of at most C times the parallax at infinity
+// instead of blowing up. s_eye_stereo[e] = (eye*sep, -conv, -C, 0); all zeros
+// in mono / ortho / with the close-up limit off (C large: no clamp)
+static float s_eye_stereo[2][4];
+// S3D_STEREO_CLAMP levels -> C: 0 flat (no pop-out), 1 gentle (0.5x),
+// 2 safe (1x, default), 3 extra (1.5x), 4 unlimited (old behaviour)
+static const float s_eye_clamp_c[5] = { 0.0f, 0.5f, 1.0f, 1.5f, 1e6f };
+static float s_eye_c = 1.0f;       // The current C
 static int s_scissor[4];           // Left, top, right, bottom of one eye
 static bool s_raw_draw;            // gx_render_clear_efb_rect: own projection, no scissor
 static bool s_discard;             // gx_draw_discard: draws are dropped, state still applies
@@ -211,6 +222,7 @@ bool gx_render_set_shader(shaderInstance_s* vsh) {
         { &s_loc_fraglit, "fraglit" },
         { &s_loc_nrmout, "nrmout" },
         { &s_loc_tcaff, "tcaff" },
+        { &s_loc_stereo, "stereo" },
     };
     bool ok = true;
     for (size_t i = 0; i < sizeof(uniforms) / sizeof(uniforms[0]); i++) {
@@ -284,6 +296,10 @@ void gx_render_init(void) {
     s_eye_autoconv = cfg_bool("S3D_STEREO_AUTOCONV", true);
     s_eye_reduced = cfg_bool("S3D_STEREO_REDUCED", false);
     s_eye_hud = cfg_int("S3D_STEREO_HUD_X1000", 0) / 1000.0f;
+    int clamp = cfg_int("S3D_STEREO_CLAMP", 2);
+    if (clamp < 0) clamp = 0;
+    if (clamp > 4) clamp = 4;
+    s_eye_c = s_eye_clamp_c[clamp];
 
     // 8x8 white texture bound when a texture is missing
     C3D_TexInit(&s_white_tex, 8, 8, GPU_RGBA8);
@@ -664,6 +680,8 @@ static void draw_eyes(u32 count, const void* indices) {
         if (!s_raw_draw) {
             C3D_SetScissor(GPU_SCISSOR_NORMAL, s_scissor[0], s_scissor[1] + y, s_scissor[2], s_scissor[3] + y);
             C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, s_loc_projection, &s_eye_proj[e]);
+            C3D_FVUnifSet(GPU_VERTEX_SHADER, s_loc_stereo, s_eye_stereo[e][0], s_eye_stereo[e][1],
+                          s_eye_stereo[e][2], s_eye_stereo[e][3]);
         }
         if (s_eye_rebind && e == 1) {
             for (int u = 0; u < GX_PICA_TEX_UNITS; u++) {
@@ -993,6 +1011,13 @@ void gx_render_frame_begin(void) {
             s_tex_res = cfg_int("S3D_TEX_RES", 0);
             s_eye_autoconv = cfg_bool("S3D_STEREO_AUTOCONV", true);
             s_eye_reduced = cfg_bool("S3D_STEREO_REDUCED", false);
+            // Screen depth: applies at once; with autoconvergence on it eases
+            // back toward Fox over ~0.2 s (the switch is the start value)
+            s_eye_conv = (float)cfg_int("S3D_STEREO_CONV", 80);
+            int clamp = cfg_int("S3D_STEREO_CLAMP", 2);
+            if (clamp < 0) clamp = 0;
+            if (clamp > 4) clamp = 4;
+            s_eye_c = s_eye_clamp_c[clamp];
             s_tex_lod_bias = cfg_int("S3D_TEX_LODBIAS_X4", 0) / 4.0f;
             s_rt_dedup = cfg_int("S3D_RT_DEDUP", 5);
             g_rt_memo = cfg_int("S3D_RT_MEMO", 15);
@@ -2737,17 +2762,18 @@ static void upload_projection(void) {
     tilt_projection(V, P, &m);
     C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, s_loc_projection, &m);
 
-    // Stereo: x_clip += eye * sep * (w - convergence) for perspective
-    // projections. Orthographic passes (HUD, 2D) stay at screen depth.
+    // Stereo: for perspective projections the parallax offset is applied in
+    // the vertex shader from the "stereo" uniform (close-up clamped, see
+    // STEREO_PLAN.md). Orthographic passes (HUD, 2D) stay at screen depth
+    // unless S3D_STEREO_HUD_X1000 pushes them behind the screen.
     s_eye_proj[0] = s_eye_proj[1] = m;
+    memset(s_eye_stereo, 0, sizeof(s_eye_stereo));
     if (s_eyes == 2 && g_gx.proj_type == GX_PERSPECTIVE) {
         for (int e = 0; e < 2; e++) {
             float k = e ? s_eye_sep : -s_eye_sep;
-            float W[2][4];
-            memcpy(W, V, sizeof(W));
-            for (int c = 0; c < 4; c++) W[0][c] += k * P[3][c];
-            W[0][3] -= k * s_eye_conv;
-            tilt_projection(W, P, &s_eye_proj[e]);
+            s_eye_stereo[e][0] = k;
+            s_eye_stereo[e][1] = -s_eye_conv;
+            s_eye_stereo[e][2] = -s_eye_c;
         }
     } else if (s_eyes == 2 && s_eye_hud != 0.0f) {
         // Optional constant parallax: the 2D layer floats in front of the screen
@@ -2759,6 +2785,10 @@ static void upload_projection(void) {
             tilt_projection(W, P, &s_eye_proj[e]);
         }
     }
+    // Base upload (eye 0 / mono): draw_eyes overwrites it per eye in stereo.
+    // gx_render_clear_efb_rect draws with its own projection and zeroes it.
+    C3D_FVUnifSet(GPU_VERTEX_SHADER, s_loc_stereo, s_eye_stereo[0][0], s_eye_stereo[0][1], s_eye_stereo[0][2],
+                  s_eye_stereo[0][3]);
 }
 
 // GX scissor (EFB pixels) -> PICA scissor. The EFB maps to the screen
@@ -3212,7 +3242,19 @@ static void upload_lighting(void) {
 
     u8 cmask = cc->enable ? cc->light_mask : 0;
     u8 amask = ac->enable ? ac->light_mask : 0;
-    for (int i = 0; i < GX_NUM_LIGHTS; i++) {
+    // The stereo close-up clamp shares one float uniform with the lights
+    // (default.v.pica: lightpos[7], STEREO_PLAN.md), so an 8th game light has
+    // no shader slot: dropped, counted and logged once.
+    if ((cmask | amask) & 0x80) {
+        static bool logged;
+        PROF_COUNT("gx.light8_dropped", 1);
+        if (!logged) {
+            logged = true;
+            LOG_WARN("gx", "8th game light used (mask %02X/%02X): light 7 dropped (stereo clamp slot)",
+                     cmask, amask);
+        }
+    }
+    for (int i = 0; i < GX_NUM_LIGHTS - 1; i++) {
         bool in_c = (cmask & (1 << i)) != 0, in_a = (amask & (1 << i)) != 0;
         C3D_BoolUnifSet(GPU_VERTEX_SHADER, s_loc_lighten + i, in_c || in_a);
         if (!in_c && !in_a) continue;
@@ -4091,6 +4133,7 @@ void gx_render_clear_efb_rect(u32 left, u32 top, u32 wd, u32 ht) {
     m.r[0].x = s_tilt[0][0]; m.r[0].y = s_tilt[0][1];
     m.r[1].x = s_tilt[1][0]; m.r[1].y = s_tilt[1][1];
     C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, s_loc_projection, &m);
+    C3D_FVUnifSet(GPU_VERTEX_SHADER, s_loc_stereo, 0.0f, 0.0f, 0.0f, 0.0f);
     C3D_BoolUnifSet(GPU_VERTEX_SHADER, s_loc_lighting, false);
     C3D_BoolUnifSet(GPU_VERTEX_SHADER, s_loc_fraglit, false);
     C3D_BoolUnifSet(GPU_VERTEX_SHADER, s_loc_nrmout, false);

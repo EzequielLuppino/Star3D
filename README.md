@@ -301,6 +301,17 @@ debug mip level off. `S3D_MENU_ADVANCED=1` in `env.txt` lists them again.
 and `S3D_RT_DELTA=2` in a PROFILE build records every setter as well and
 checks each delta against the replayed state, logging any mismatch.
 
+The 3D comfort settings are in the Settings tab too: "3D: strength"
+(`S3D_STEREO_SEP_X1000`, default 25 = the parallax at infinity in clip units
+x1000 at the full slider), "3D: screen depth" (`S3D_STEREO_CONV`, default 80
+world units = the distance with zero parallax, the starting value while
+"3D: depth follows Fox" is on) and "3D: close-up limit" (`S3D_STEREO_CLAMP`,
+default Safe). The close-up limit caps how far objects between the camera and
+the screen plane may pop out: Safe = as much as the background recedes,
+Extra = 1.5x, Gentle = half, Flat = nothing pops out, No limit = the old
+behaviour. Without it, anything close to the camera (menus, close-ups) gets
+extreme crossed parallax in 3D. Details: `3DS/STEREO_PLAN.md`.
+
 Changes are kept in `settings.txt`. A `settings.txt` from a build before
 these defaults is ignored once. For bug reports, turn Logging on (or put
 `S3D_LOG_VERBOSE=1` in `env.txt`): with it off, only warnings and errors are
