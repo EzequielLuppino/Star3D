@@ -175,6 +175,7 @@ static float s_eye_stereo[2][4];
 // 2 safe (1x), 3 extra (1.5x), 4 unlimited (old behaviour)
 static const float s_eye_clamp_c[5] = { 0.0f, 0.5f, 1.0f, 1.5f, 1e6f };
 static float s_eye_c = 1.0f;       // The current C
+static bool s_stereo_ztest = true; // S3D_STEREO_ZTEST: per-eye occlusion of z-off glows (bug 43)
 static int s_scissor[4];           // Left, top, right, bottom of one eye
 static bool s_raw_draw;            // gx_render_clear_efb_rect: own projection, no scissor
 static bool s_discard;             // gx_draw_discard: draws are dropped, state still applies
@@ -300,6 +301,7 @@ void gx_render_init(void) {
     if (clamp < 0) clamp = 0;
     if (clamp > 4) clamp = 4;
     s_eye_c = s_eye_clamp_c[clamp];
+    s_stereo_ztest = cfg_bool("S3D_STEREO_ZTEST", true);
 
     // 8x8 white texture bound when a texture is missing
     C3D_TexInit(&s_white_tex, 8, 8, GPU_RGBA8);
@@ -1018,6 +1020,7 @@ void gx_render_frame_begin(void) {
             if (clamp < 0) clamp = 0;
             if (clamp > 4) clamp = 4;
             s_eye_c = s_eye_clamp_c[clamp];
+            s_stereo_ztest = cfg_bool("S3D_STEREO_ZTEST", true);
             s_tex_lod_bias = cfg_int("S3D_TEX_LODBIAS_X4", 0) / 4.0f;
             s_rt_dedup = cfg_int("S3D_RT_DEDUP", 5);
             g_rt_memo = cfg_int("S3D_RT_MEMO", 15);
@@ -2670,7 +2673,17 @@ static void apply_pixel_state(void) {
     if (px->color_update) mask |= GPU_WRITE_RED | GPU_WRITE_GREEN | GPU_WRITE_BLUE;
     if (px->alpha_update) mask |= GPU_WRITE_ALPHA;
     if (px->z_enable && px->z_update) mask |= GPU_WRITE_DEPTH;
-    C3D_DepthTest(true, px->z_enable ? depth_func(px->z_func) : GPU_ALWAYS, mask);
+    // Stereo (S3D_STEREO_ZTEST, bug 43): z-off blended perspective draws
+    // (light glows and other transparent quads) rely on draw order for
+    // occlusion, which the per-eye parallax breaks - the glow peeks out from
+    // behind walls. Test each eye's depth with LEQUAL instead, so geometry in
+    // front occludes them per eye. Mono stays GPU_ALWAYS (the GameCube look).
+    if (s_eyes == 2 && s_stereo_ztest && g_gx.proj_type == GX_PERSPECTIVE && !px->z_enable &&
+        px->blend_mode == GX_BM_BLEND) {
+        C3D_DepthTest(true, GPU_LEQUAL, mask & ~GPU_WRITE_DEPTH);
+    } else {
+        C3D_DepthTest(true, px->z_enable ? depth_func(px->z_func) : GPU_ALWAYS, mask);
+    }
 
     switch (px->blend_mode) {
         case GX_BM_BLEND: {

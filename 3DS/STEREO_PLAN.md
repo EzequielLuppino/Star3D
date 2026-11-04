@@ -167,6 +167,29 @@ the same GPU time).
 - `3DS/port/touchui_3ds.c`: the three Settings rows.
 - `README.md` (Settings menu), `GRAPHICS_PLAN.md` (step 11).
 
+## Bug 43: lights visible through walls in 3D
+
+Captures `20261103_225606_f3012` (mono) and `20261103_225601_f2867` (stereo
+left eye): at x ~159-173, y ~110-123 the stereo frame shows an additive light
+quad (state #594: blend SRCALPHA/ONE, depth test disabled `z 0/7/0`, texture
+projected from world position, 2 triangles) where the mono frame shows the
+wall that should cover it (state #402).
+
+The game draws these glows with the depth test off and relies on draw order:
+in mono the wall, drawn later, covers the glow. In stereo each eye displaces
+the glow and the wall by their own depth parallax, so the glow slides out
+from behind the wall's silhouette and draws over the background - it reads as
+"light through the wall". (The close-up clamp settings change how much it
+slides, but only per-eye occlusion fixes it.)
+
+Fix: `S3D_STEREO_ZTEST` (default 1, Settings row "3D: occlude glows"): in
+stereo, z-off blended perspective draws test the depth buffer with LEQUAL and
+no depth write, so geometry in front occludes them per eye.
+Mono is unchanged (GPU_ALWAYS, the GameCube look). Known risk: a glow quad
+that pokes into geometry now clips at the intersection line; if one shows up
+on hardware, bias these draws toward the camera (PICA polygon offset) or
+exempt that effect.
+
 ## Open items
 
 - Hardware verification of the new shader (position block in 4 variants,

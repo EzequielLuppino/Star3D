@@ -168,6 +168,9 @@ static const Row settings_rows[] = {
     { "3D: strength", ROW_CHOICE, "S3D_STEREO_SEP_X1000", 30, sep_choices, sep_names },
     { "3D: screen depth", ROW_CHOICE, "S3D_STEREO_CONV", 80, conv_choices, conv_names },
     { "3D: close-up limit", ROW_CHOICE, "S3D_STEREO_CLAMP", 0, clamp_choices, clamp_names },
+    // S3D_STEREO_ZTEST (bug 43): per-eye occlusion of z-off glow quads in
+    // stereo; a regular row so it can be flipped back if a glow ever clips
+    { "3D: occlude glows", ROW_BOOL, "S3D_STEREO_ZTEST", 1 },
     // S3D_STEREO_AUTO: the slider also switches the whole quality profile -
     // the cut-effects config with the slider up, the boot settings with it
     // down (port/stereo_auto_3ds.c)
