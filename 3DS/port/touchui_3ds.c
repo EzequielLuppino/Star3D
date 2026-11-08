@@ -182,12 +182,13 @@ static const Row settings_rows[] = {
     { "C-stick moves camera", ROW_BOOL, "S3D_CSTICK_CAMERA", 1 },
     { "Texture blur (LOD bias)", ROW_CHOICE, "S3D_TEX_LODBIAS_X4", 0, lod_choices, lod_names, .advanced = true },
     { "Texture resolution", ROW_CHOICE, "S3D_TEX_RES", 0, tex_res_choices, tex_res_names },
-    // Bug 45 A/B: the per-viewport depth remap (exact GX depth) can make
-    // coplanar redraws flicker; off gives every draw the same raw depth map
-    { "Depth: per-viewport remap", ROW_BOOL, "S3D_DEPTH_BIAS", 1 },
-    // Bug 45: extra toward-camera bias for effect-pass viewports (the
-    // reflection/floor fight); dial up at the flicker spot
-    { "Depth: effect bias", ROW_CHOICE, "S3D_DEPTH_EPS_X1000", 0, eps_choices, eps_names },
+    // Bug 45, hidden from the everyday menu (S3D_MENU_ADVANCED=1 lists them):
+    // the per-viewport depth remap (exact GX depth; off makes the projected
+    // shadows flicker), the effect-pass bias (Off) and the light-pool bias
+    // (2, the bug 45 fix - keep at 2)
+    { "Depth: per-viewport remap", ROW_BOOL, "S3D_DEPTH_BIAS", 1, .advanced = true },
+    { "Depth: effect bias", ROW_CHOICE, "S3D_DEPTH_EPS_X1000", 0, eps_choices, eps_names, .advanced = true },
+    { "Depth: pool bias", ROW_CHOICE, "S3D_DEPTH_POOL_EPS_X1000", 2, eps_choices, eps_names, .advanced = true },
     { "Lean shaders", ROW_CHOICE, "S3D_VSH_LEAN", 1, lean_choices, lean_names, .advanced = true },
     { "Debug: mip level", ROW_CHOICE, "S3D_DBG_MIP", 0, mip_choices, mip_names, .advanced = true },
     { "Logging", ROW_LOG },

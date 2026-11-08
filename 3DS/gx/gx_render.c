@@ -140,6 +140,8 @@ static bool s_dbg_hold;           // S3D_DBG_HOLD (implied by S3D_DBG_IDCOLOR): 
 static u32 s_state_index;         // State changes so far this frame (the dump's "state #N")
 static bool s_depth_bias = true;  // S3D_DEPTH_BIAS (viewport near/far -> depth map)
 static float s_depth_eps;         // S3D_DEPTH_EPS_X1000/1000: bug 45 effect-pass bias (live)
+static float s_pool_eps;          // S3D_DEPTH_POOL_EPS_X1000/1000: bug 45 light-pool bias (live)
+static bool s_map_pool;           // The depth map currently carries the pool bias
 
 // Uniform locations in default.v.pica
 static int s_loc_projection, s_loc_posmtx, s_loc_texmtx;
@@ -255,6 +257,7 @@ void gx_render_init(void) {
     s_dbg_skip_to = cfg_int("S3D_DBG_SKIP_TO", s_dbg_skip_from);
     s_depth_bias = cfg_bool("S3D_DEPTH_BIAS", true);
     s_depth_eps = cfg_int("S3D_DEPTH_EPS_X1000", 0) / 1000.0f;
+    s_pool_eps = cfg_int("S3D_DEPTH_POOL_EPS_X1000", 2) / 1000.0f;
     s_mp_enabled = cfg_bool("S3D_TEV_MULTIPASS", true);
     s_ws_enabled = cfg_bool("S3D_WATER_SPLIT", true);
     for (int i = 0; i < 2; i++) {
@@ -1039,6 +1042,7 @@ void gx_render_frame_begin(void) {
             s_dbg_mip = cfg_int("S3D_DBG_MIP", 0);
             s_depth_bias = cfg_bool("S3D_DEPTH_BIAS", true);  // live: bug 45 A/B
             s_depth_eps = cfg_int("S3D_DEPTH_EPS_X1000", 0) / 1000.0f;
+            s_pool_eps = cfg_int("S3D_DEPTH_POOL_EPS_X1000", 2) / 1000.0f;
             g_gx.dirty = GX_DIRTY_ALL;
         }
     }
@@ -2660,42 +2664,61 @@ static void capture_override(void) {
 // sets a slightly negative near value for decals, transparent and effect
 // passes (camera.c), which pulls them toward the viewer; only geometry right
 // at the near plane leaves the 0..1 range.
-static void apply_depth_map(void) {
+// GX viewport near/far -> PICA depth (PICA depth = 1 - GX depth). The game
+// sets a slightly negative near value for decals, transparent and effect
+// passes (camera.c), which pulls them toward the viewer; only geometry right
+// at the near plane leaves the 0..1 range.
+// `extra` adds a constant toward-camera offset: s_depth_eps for the
+// negative-near effect viewports (S3D_DEPTH_EPS_X1000, bug 45 A/B) and
+// s_pool_eps for the light-pool footprint meshes (see apply_pixel_state).
+static void depth_map_apply(float extra) {
     float vn = g_gx.viewport[4], vf = g_gx.viewport[5];
     if (!s_depth_bias || vf <= vn) {
         C3D_DepthMap(true, -1.0f, 0.0f);
         return;
     }
-    // z_ndc -1 (near) .. 0 (far): GX depth = vf + (vf - vn) * z_ndc.
-    // Bug 45: the reflection and the light-pool redraws of the floor are
-    // nearly coplanar but use different matrices, so their depth fields cross
-    // marginally and swap per frame (flicker). S3D_DEPTH_EPS_X1000 (Settings >
-    // "Depth: effect bias") adds a constant toward-camera offset to the
-    // negative-near effect viewports, which the game already uses to pull
-    // decals/effects nearer; the game's own bias is proportional to z_ndc and
-    // fades with distance.
-    if (vn < 0.0f) {
-        PROF_COUNT("gx.depthmap_neg", 1);
-        C3D_DepthMap(true, -(vf - vn), 1.0f - vf + s_depth_eps);
-    } else {
-        C3D_DepthMap(true, -(vf - vn), 1.0f - vf);
-    }
+    // z_ndc -1 (near) .. 0 (far): GX depth = vf + (vf - vn) * z_ndc
+    if (vn < 0.0f) PROF_COUNT("gx.depthmap_neg", 1);
+    C3D_DepthMap(true, -(vf - vn), 1.0f - vf + extra);
+}
+
+static void apply_depth_map(void) {
+    // The effect bias only touches the negative-near effect viewports (the
+    // game's own decal convention); everything else keeps the exact map
+    depth_map_apply(g_gx.viewport[4] < 0.0f ? s_depth_eps : 0.0f);
 }
 
 static void apply_pixel_state(void) {
     const GxPixelState* px = &g_gx.pixel;
 
+    // Bug 45: the light-pool footprint meshes (opaque, depth-writing,
+    // POS-projected textures) float barely above the floor they decorate;
+    // the PICA's 24-bit floats make their LEQUAL against the floor and the
+    // reflection redraws marginal, so the winner flips per frame (flicker,
+    // "lights through walls" in 3D). Bias their depth map a constant toward
+    // the camera (S3D_DEPTH_POOL_EPS_X1000) so they deterministically win,
+    // as the GameCube's float32 margin did.
+    bool pool = g_gx.proj_type == GX_PERSPECTIVE && px->z_enable && px->z_update &&
+                px->blend_mode == GX_BM_NONE && g_gx.num_texgens > 0 && g_gx.texgen[0].src == GX_TG_POS;
+    if (pool != s_map_pool) {
+        s_map_pool = pool;
+        depth_map_apply((g_gx.viewport[4] < 0.0f ? s_depth_eps : 0.0f) + (pool ? s_pool_eps : 0.0f));
+    }
+
     GPU_WRITEMASK mask = 0;
     if (px->color_update) mask |= GPU_WRITE_RED | GPU_WRITE_GREEN | GPU_WRITE_BLUE;
     if (px->alpha_update) mask |= GPU_WRITE_ALPHA;
     if (px->z_enable && px->z_update) mask |= GPU_WRITE_DEPTH;
-    // Stereo (S3D_STEREO_ZTEST, bug 44): z-off blended perspective draws
-    // (light glows and other transparent quads) rely on draw order for
-    // occlusion, which the per-eye parallax breaks - the glow peeks out from
-    // behind walls. Test each eye's depth with LEQUAL instead, so geometry in
-    // front occludes them per eye. Mono stays GPU_ALWAYS (the GameCube look).
+    // Stereo (S3D_STEREO_ZTEST, bug 44): z-off ADDITIVE glow quads rely on
+    // draw order for occlusion, which the per-eye parallax breaks - the glow
+    // peeks out from behind walls. Test each eye's depth with LEQUAL instead,
+    // so geometry in front occludes them per eye. Only additive draws
+    // (SRCALPHA x ONE): the alpha-blended z-off quads (snow, steam, ice
+    // panels) must keep drawing over the scene as the game intended -
+    // testing them made the icemountain light pools blaze through their
+    // cover (bug 44 follow-up). Mono stays GPU_ALWAYS (the GameCube look).
     if (s_eyes == 2 && s_stereo_ztest && g_gx.proj_type == GX_PERSPECTIVE && !px->z_enable &&
-        px->blend_mode == GX_BM_BLEND) {
+        px->blend_mode == GX_BM_BLEND && px->blend_dst == GX_BL_ONE) {
         C3D_DepthTest(true, GPU_LEQUAL, mask & ~GPU_WRITE_DEPTH);
     } else {
         C3D_DepthTest(true, px->z_enable ? depth_func(px->z_func) : GPU_ALWAYS, mask);
