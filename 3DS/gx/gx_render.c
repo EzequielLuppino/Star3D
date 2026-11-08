@@ -139,6 +139,7 @@ static int s_dbg_skip_from = -1, s_dbg_skip_to = -1;  // S3D_DBG_SKIP_FROM/TO: d
 static bool s_dbg_hold;           // S3D_DBG_HOLD (implied by S3D_DBG_IDCOLOR): freeze on the dumped frame
 static u32 s_state_index;         // State changes so far this frame (the dump's "state #N")
 static bool s_depth_bias = true;  // S3D_DEPTH_BIAS (viewport near/far -> depth map)
+static float s_depth_eps;         // S3D_DEPTH_EPS_X1000/1000: bug 45 effect-pass bias (live)
 
 // Uniform locations in default.v.pica
 static int s_loc_projection, s_loc_posmtx, s_loc_texmtx;
@@ -171,11 +172,11 @@ static C3D_Mtx s_eye_proj[2];
 // instead of blowing up. s_eye_stereo[e] = (eye*sep, -conv, -C, 0); all zeros
 // in mono / ortho / with the close-up limit off (C large: no clamp)
 static float s_eye_stereo[2][4];
-// S3D_STEREO_CLAMP levels -> C: 0 flat (no pop-out, default), 1 gentle (0.5x),
-// 2 safe (1x), 3 extra (1.5x), 4 unlimited (old behaviour)
+// S3D_STEREO_CLAMP levels -> C: 0 flat (no pop-out), 1 gentle (0.5x),
+// 2 safe (1x, default), 3 extra (1.5x), 4 unlimited (old behaviour)
 static const float s_eye_clamp_c[5] = { 0.0f, 0.5f, 1.0f, 1.5f, 1e6f };
 static float s_eye_c = 1.0f;       // The current C
-static bool s_stereo_ztest = true; // S3D_STEREO_ZTEST: per-eye occlusion of z-off glows (bug 43)
+static bool s_stereo_ztest = true; // S3D_STEREO_ZTEST: per-eye occlusion of z-off glows (bug 44)
 static int s_scissor[4];           // Left, top, right, bottom of one eye
 static bool s_raw_draw;            // gx_render_clear_efb_rect: own projection, no scissor
 static bool s_discard;             // gx_draw_discard: draws are dropped, state still applies
@@ -253,6 +254,7 @@ void gx_render_init(void) {
     s_dbg_skip_from = cfg_int("S3D_DBG_SKIP_FROM", -1);
     s_dbg_skip_to = cfg_int("S3D_DBG_SKIP_TO", s_dbg_skip_from);
     s_depth_bias = cfg_bool("S3D_DEPTH_BIAS", true);
+    s_depth_eps = cfg_int("S3D_DEPTH_EPS_X1000", 0) / 1000.0f;
     s_mp_enabled = cfg_bool("S3D_TEV_MULTIPASS", true);
     s_ws_enabled = cfg_bool("S3D_WATER_SPLIT", true);
     for (int i = 0; i < 2; i++) {
@@ -292,12 +294,12 @@ void gx_render_init(void) {
     bool flipped = s_tilt[1][0] < 0.0f;
     s_eye_y[0] = flipped ? 400 : 0;
     s_eye_y[1] = flipped ? 0 : 400;
-    s_eye_conv = (float)cfg_int("S3D_STEREO_CONV", 80);
+    s_eye_conv = (float)cfg_int("S3D_STEREO_CONV", 60);
     s_eye_swap = cfg_bool("S3D_STEREO_SWAP", false);
     s_eye_autoconv = cfg_bool("S3D_STEREO_AUTOCONV", false);
     s_eye_reduced = cfg_bool("S3D_STEREO_REDUCED", true);
     s_eye_hud = cfg_int("S3D_STEREO_HUD_X1000", 0) / 1000.0f;
-    int clamp = cfg_int("S3D_STEREO_CLAMP", 0);
+    int clamp = cfg_int("S3D_STEREO_CLAMP", 2);
     if (clamp < 0) clamp = 0;
     if (clamp > 4) clamp = 4;
     s_eye_c = s_eye_clamp_c[clamp];
@@ -1015,8 +1017,8 @@ void gx_render_frame_begin(void) {
             s_eye_reduced = cfg_bool("S3D_STEREO_REDUCED", true);
             // Screen depth: applies at once; with autoconvergence on it eases
             // back toward Fox over ~0.2 s (the switch is the start value)
-            s_eye_conv = (float)cfg_int("S3D_STEREO_CONV", 80);
-            int clamp = cfg_int("S3D_STEREO_CLAMP", 0);
+            s_eye_conv = (float)cfg_int("S3D_STEREO_CONV", 60);
+            int clamp = cfg_int("S3D_STEREO_CLAMP", 2);
             if (clamp < 0) clamp = 0;
             if (clamp > 4) clamp = 4;
             s_eye_c = s_eye_clamp_c[clamp];
@@ -1035,6 +1037,8 @@ void gx_render_frame_begin(void) {
                 g_c3d_fast = (g_c3d_fast & ~4) | ((steps & 8) ? 4 : 0);
             }
             s_dbg_mip = cfg_int("S3D_DBG_MIP", 0);
+            s_depth_bias = cfg_bool("S3D_DEPTH_BIAS", true);  // live: bug 45 A/B
+            s_depth_eps = cfg_int("S3D_DEPTH_EPS_X1000", 0) / 1000.0f;
             g_gx.dirty = GX_DIRTY_ALL;
         }
     }
@@ -2662,8 +2666,20 @@ static void apply_depth_map(void) {
         C3D_DepthMap(true, -1.0f, 0.0f);
         return;
     }
-    // z_ndc -1 (near) .. 0 (far): GX depth = vf + (vf - vn) * z_ndc
-    C3D_DepthMap(true, -(vf - vn), 1.0f - vf);
+    // z_ndc -1 (near) .. 0 (far): GX depth = vf + (vf - vn) * z_ndc.
+    // Bug 45: the reflection and the light-pool redraws of the floor are
+    // nearly coplanar but use different matrices, so their depth fields cross
+    // marginally and swap per frame (flicker). S3D_DEPTH_EPS_X1000 (Settings >
+    // "Depth: effect bias") adds a constant toward-camera offset to the
+    // negative-near effect viewports, which the game already uses to pull
+    // decals/effects nearer; the game's own bias is proportional to z_ndc and
+    // fades with distance.
+    if (vn < 0.0f) {
+        PROF_COUNT("gx.depthmap_neg", 1);
+        C3D_DepthMap(true, -(vf - vn), 1.0f - vf + s_depth_eps);
+    } else {
+        C3D_DepthMap(true, -(vf - vn), 1.0f - vf);
+    }
 }
 
 static void apply_pixel_state(void) {
@@ -2673,7 +2689,7 @@ static void apply_pixel_state(void) {
     if (px->color_update) mask |= GPU_WRITE_RED | GPU_WRITE_GREEN | GPU_WRITE_BLUE;
     if (px->alpha_update) mask |= GPU_WRITE_ALPHA;
     if (px->z_enable && px->z_update) mask |= GPU_WRITE_DEPTH;
-    // Stereo (S3D_STEREO_ZTEST, bug 43): z-off blended perspective draws
+    // Stereo (S3D_STEREO_ZTEST, bug 44): z-off blended perspective draws
     // (light glows and other transparent quads) rely on draw order for
     // occlusion, which the per-eye parallax breaks - the glow peeks out from
     // behind walls. Test each eye's depth with LEQUAL instead, so geometry in

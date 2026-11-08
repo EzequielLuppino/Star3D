@@ -134,8 +134,8 @@ word budget rechecked.
 | Row | Switch | Values | Default |
 |-----|--------|--------|---------|
 | 3D: strength | `S3D_STEREO_SEP_X1000` | 15 Soft, 20 Low, 25 Normal, 30 Strong, 40 Max (clip units x1000) | 30 |
-| 3D: screen depth | `S3D_STEREO_CONV` | 40 Near, 60 Close, 80 Normal, 120 Far, 160 Distant (world units) | 80 |
-| 3D: close-up limit | `S3D_STEREO_CLAMP` | Safe, Extra, Gentle, Flat, No limit | Flat (0) |
+| 3D: screen depth | `S3D_STEREO_CONV` | 40 Near, 60 Close, 80 Normal, 120 Far, 160 Distant (world units) | 60 |
+| 3D: close-up limit | `S3D_STEREO_CLAMP` | Safe, Extra, Gentle, Flat, No limit | Safe (2) |
 
 All three are live (apply within a frame, saved to settings.txt, overridable
 from env.txt). Note: with "3D: depth follows Fox" on, the screen depth value
@@ -167,7 +167,7 @@ the same GPU time).
 - `3DS/port/touchui_3ds.c`: the three Settings rows.
 - `README.md` (Settings menu), `GRAPHICS_PLAN.md` (step 11).
 
-## Bug 43: lights visible through walls in 3D
+## Bug 44: lights visible through walls in 3D
 
 Captures `20261103_225606_f3012` (mono) and `20261103_225601_f2867` (stereo
 left eye): at x ~159-173, y ~110-123 the stereo frame shows an additive light

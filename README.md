@@ -278,8 +278,8 @@ object distance Low, depth of field on, gyro aiming on, C-stick camera on and
 logging off. The 3D options are "3D: faster (fewer effects)" on (half the fur
 layers and no blur while the 3D slider is up), "3D: depth follows Fox" off
 (the screen depth stays at the set distance), "3D: strength" Strong (30),
-"3D: screen depth" Normal (80) and "3D: close-up limit" Flat (nothing pops
-out of the screen).
+"3D: screen depth" Close (60) and "3D: close-up limit" Safe (foreground pops
+out as far as the background recedes).
 "Grass quality" (`S3D_GRASS_QUALITY`) is High (the default: the fern trees,
 grass clumps and flowers all render), Low (trees only: the grass clumps and
 flowers are hidden) or Off (no plants at all, the fruit hanging on the trees
@@ -306,10 +306,10 @@ checks each delta against the replayed state, logging any mismatch.
 
 The 3D comfort settings are in the Settings tab too: "3D: strength"
 (`S3D_STEREO_SEP_X1000`, default 30 = the parallax at infinity in clip units
-x1000 at the full slider), "3D: screen depth" (`S3D_STEREO_CONV`, default 80
+x1000 at the full slider), "3D: screen depth" (`S3D_STEREO_CONV`, default 60
 world units = the distance with zero parallax, the starting value while
 "3D: depth follows Fox" is on) and "3D: close-up limit" (`S3D_STEREO_CLAMP`,
-default Flat). The close-up limit caps how far objects between the camera and
+default Safe). The close-up limit caps how far objects between the camera and
 the screen plane may pop out: Safe = as much as the background recedes,
 Extra = 1.5x, Gentle = half, Flat = nothing pops out, No limit = the old
 behaviour. Without it, anything close to the camera (menus, close-ups) gets

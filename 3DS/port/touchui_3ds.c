@@ -33,11 +33,10 @@
 #include "watchdog.h"
 
 #define SETTINGS_FILE "sdmc:/3ds/star3d/settings.txt"
-// Version 3 (2026-11-04 defaults: 30 FPS cap off, shadows High, object
-// distance Low, 3D: faster on, depth follows Fox off, strength 30, close-up
-// limit Flat): files written before it are ignored once, so everyone starts
-// from the new defaults
-#define SETTINGS_VERSION 3
+// Version 4 (2026-11-08 defaults: screen depth 60, close-up limit Safe):
+// files written before it are ignored once, so everyone starts from the new
+// defaults
+#define SETTINGS_VERSION 4
 
 enum { TAB_SETTINGS, TAB_MAP, TAB_CHEATS, TAB_COUNT };
 enum { ROW_BOOL, ROW_CHOICE, ROW_LOG, ROW_ACTION, ROW_CHEAT, ROW_INFO, ROW_SLOTS, ROW_FPS };
@@ -101,6 +100,10 @@ static const char* const conv_names[] = { [40] = "Near", [60] = "Close", [80] = 
 static const int clamp_choices[] = { 2, 3, 1, 0, 4, INT32_MIN };
 static const char* const clamp_names[] = { [2] = "Safe", [3] = "Extra", [1] = "Gentle", [0] = "Flat",
                                            [4] = "No limit" };
+// S3D_DEPTH_EPS_X1000 (bug 45): constant toward-camera bias for the
+// negative-near effect viewports, in thousandths of the depth range
+static const int eps_choices[] = { 0, 2, 5, 10, 20, INT32_MIN };
+static const char* const eps_names[] = { [0] = "Off", [2] = "2", [5] = "5", [10] = "10", [20] = "20" };
 
 static char s_status[48];
 static int s_status_frames;
@@ -166,9 +169,9 @@ static const Row settings_rows[] = {
     { "3D: faster (fewer effects)", ROW_BOOL, "S3D_STEREO_REDUCED", 1 },
     { "3D: depth follows Fox", ROW_BOOL, "S3D_STEREO_AUTOCONV", 0 },
     { "3D: strength", ROW_CHOICE, "S3D_STEREO_SEP_X1000", 30, sep_choices, sep_names },
-    { "3D: screen depth", ROW_CHOICE, "S3D_STEREO_CONV", 80, conv_choices, conv_names },
-    { "3D: close-up limit", ROW_CHOICE, "S3D_STEREO_CLAMP", 0, clamp_choices, clamp_names },
-    // S3D_STEREO_ZTEST (bug 43): per-eye occlusion of z-off glow quads in
+    { "3D: screen depth", ROW_CHOICE, "S3D_STEREO_CONV", 60, conv_choices, conv_names },
+    { "3D: close-up limit", ROW_CHOICE, "S3D_STEREO_CLAMP", 2, clamp_choices, clamp_names },
+    // S3D_STEREO_ZTEST (bug 44): per-eye occlusion of z-off glow quads in
     // stereo; a regular row so it can be flipped back if a glow ever clips
     { "3D: occlude glows", ROW_BOOL, "S3D_STEREO_ZTEST", 1 },
     // S3D_STEREO_AUTO: the slider also switches the whole quality profile -
@@ -179,6 +182,12 @@ static const Row settings_rows[] = {
     { "C-stick moves camera", ROW_BOOL, "S3D_CSTICK_CAMERA", 1 },
     { "Texture blur (LOD bias)", ROW_CHOICE, "S3D_TEX_LODBIAS_X4", 0, lod_choices, lod_names, .advanced = true },
     { "Texture resolution", ROW_CHOICE, "S3D_TEX_RES", 0, tex_res_choices, tex_res_names },
+    // Bug 45 A/B: the per-viewport depth remap (exact GX depth) can make
+    // coplanar redraws flicker; off gives every draw the same raw depth map
+    { "Depth: per-viewport remap", ROW_BOOL, "S3D_DEPTH_BIAS", 1 },
+    // Bug 45: extra toward-camera bias for effect-pass viewports (the
+    // reflection/floor fight); dial up at the flicker spot
+    { "Depth: effect bias", ROW_CHOICE, "S3D_DEPTH_EPS_X1000", 0, eps_choices, eps_names },
     { "Lean shaders", ROW_CHOICE, "S3D_VSH_LEAN", 1, lean_choices, lean_names, .advanced = true },
     { "Debug: mip level", ROW_CHOICE, "S3D_DBG_MIP", 0, mip_choices, mip_names, .advanced = true },
     { "Logging", ROW_LOG },
