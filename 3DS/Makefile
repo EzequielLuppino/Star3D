@@ -6,6 +6,12 @@
 
 ### Build Options ###
 VERSION ?= us
+# Game data version (RELEASING.md). Bump it when the game data itself changes
+# in a way new code depends on (new/changed assets). The number is written to
+# the data's data_info.txt and compiled into the code (-DS3D_DATA_VERSION);
+# at boot the game warns in the log when the SD gamedata is older than the
+# build. Changing it re-extracts the data and rebuilds the port objects.
+DATA_VERSION ?= 1
 
 ### Toolchain Configuration ###
 DEVKITPRO ?= /opt/devkitpro
@@ -72,6 +78,9 @@ FOX_GAME_CFLAGS := $(FOX_CFLAGS) -include $(FOX)/port/include/foxhollow_compat.h
 
 # Our own code: full warnings
 PORT_CFLAGS := $(BASE_CFLAGS) -Wall -Wno-unused-function -I. -Ios -Igx -Iport -I$(BUILD_DIR)
+# Compiled-in game data version (main.c compares it with the data's
+# data_info.txt and warns when the SD gamedata is older, RELEASING.md)
+PORT_CFLAGS += -DS3D_DATA_VERSION=$(DATA_VERSION)
 
 LDFLAGS := -specs=ld/star3d.specs -g $(ARCH) -Wl,--gc-sections \
            -L$(CTRULIB)/lib -L$(PORTLIBS)/lib
@@ -261,46 +270,77 @@ CONVERT_SCRIPTS := tools/extract_disc.py tools/audio_convert.py tools/tex_conver
                    tools/mesh_reduce.py tools/native/texconv.c tools/native/meshsimp.c
 # Re-extracts when a conversion option changes (the file only changes then)
 CONVERT_OPTIONS := $(BUILD_ROOT)/host/convert_options.txt
-CONVERT_OPTIONS_TEXT := TEX_QUALITY=$(TEX_QUALITY) TEX_MIPMAPS=$(TEX_MIPMAPS) TEX_SCALE=$(TEX_SCALE) VIDEO_SCALE=$(VIDEO_SCALE) POLY_REDUCE=$(POLY_REDUCE) POLY_MAX_ERROR=$(POLY_MAX_ERROR)
+CONVERT_OPTIONS_TEXT := TEX_QUALITY=$(TEX_QUALITY) TEX_MIPMAPS=$(TEX_MIPMAPS) TEX_SCALE=$(TEX_SCALE) VIDEO_SCALE=$(VIDEO_SCALE) POLY_REDUCE=$(POLY_REDUCE) POLY_MAX_ERROR=$(POLY_MAX_ERROR) DATA_VERSION=$(DATA_VERSION)
 
 # CIA title (GRAPHICS_PLAN.md 1.3)
 APP_UNIQUE_ID := 0xF5FA0
 
-.PHONY: all clean test code romfs sd-romfs cia mesh-check FORCE
+.PHONY: all clean test code 3dsx cia gamedata sd-romfs full full-3dsx full-cia romfs mesh-check help FORCE
 
-### Default target ###
-# NO_CIA=1 skips the .cia (faster test builds: makerom repacks the whole
-# romfs). Docker: docker run -e NO_CIA=1 ...
-BUILD_CIA := $(if $(filter 1,$(NO_CIA)),,$(MAKEROM))
-all: $(BUILD_DIR)/star3d.3dsx $(if $(BUILD_CIA),$(BUILD_DIR)/star3d.cia)
+### Targets ###
+# The game data is decoupled from the code images (RELEASING.md): "all" builds
+# the code-only .3dsx and .cia plus out/star3d-gamedata.zip, the data for the
+# SD card. Players put the data on the SD once (sdmc:/3ds/star3d/gamedata/,
+# main.c) and code updates are then small images installed over the old ones.
+# NO_CIA=1 skips the .cia, NO_GAMEDATA=1 skips the data zip (quick test
+# builds). Docker: docker run -e NO_CIA=1 ...
+BUILD_CIA      := $(if $(filter 1,$(NO_CIA)),,$(MAKEROM))
+BUILD_GAMEDATA := $(if $(filter 1,$(NO_GAMEDATA)),,1)
+all: $(BUILD_DIR)/star3d.3dsx \
+     $(if $(BUILD_CIA),$(BUILD_DIR)/star3d.cia) \
+     $(if $(BUILD_GAMEDATA),../out/star3d-gamedata.zip)
 ifeq ($(MAKEROM),)
 	@echo "note: makerom not found, star3d.cia not built (the Docker build has it)"
 endif
 
-cia: $(BUILD_DIR)/star3d.cia
-
 test: all
 
-# Code only, without game data (no ISO needed)
-code: $(BUILD_DIR)/star3d-nodata.3dsx
+# Code only, without game data (no ISO needed). "code" is the old name.
+code: $(BUILD_DIR)/star3d.3dsx
+3dsx: $(BUILD_DIR)/star3d.3dsx
 
-romfs: $(ROMFS_STAMP)
+# Code-only .cia: installs over an older build, keeps using the gamedata
+# folder on the SD card. Needs the ISO (the HOME Menu banner comes from it).
+cia: $(BUILD_DIR)/star3d.cia
 
-# Packs the extracted data into one file the game loads from the SD card
-# (sdmc:/3ds/star3d/romfs.bin, main.c): with it, a code-only .3dsx (the
-# "code" target) runs the full game, so console tests only send the small
-# code image over 3dslink. Push out/star3d-romfs.bin to the SD card once.
-sd-romfs: $(ROMFS_STAMP)
-	@mkdir -p $(BUILD_ROOT)/sd
-	@echo "ROMFS $(BUILD_ROOT)/sd/star3d-romfs.bin"
-	@mkromfs3ds $(ROMFS_DIR) $(BUILD_ROOT)/sd/star3d-romfs.bin
+# The game data as one zip. Extract it to the SD card's root: it unpacks to
+# sdmc:/3ds/star3d/gamedata/romfs.bin (main.c). Do this once per SD card.
+gamedata: ../out/star3d-gamedata.zip
+
+# The unpacked data file (what the zip contains), for the in-game server
+# (PUT /romfs.bin) and ftpd transfers.
+sd-romfs: $(BUILD_ROOT)/sd/star3d-romfs.bin
 	@mkdir -p ../out
-	@cp $(BUILD_ROOT)/sd/star3d-romfs.bin ../out/star3d-romfs.bin
+	@cp $< ../out/star3d-romfs.bin
 	@ls -la ../out/star3d-romfs.bin
+
+# Data embedded in the images (single-file installs, no gamedata folder
+# needed): the old behaviour. These are the several-hundred-MB files.
+full: $(BUILD_DIR)/star3d-full.3dsx $(if $(BUILD_CIA),$(BUILD_DIR)/star3d-full.cia)
+full-3dsx: $(BUILD_DIR)/star3d-full.3dsx
+full-cia: $(BUILD_DIR)/star3d-full.cia
+
+# Only extract and convert the game data (no code images)
+romfs: $(ROMFS_STAMP)
 
 # Checks the polygon-reduced model/map banks against the disc (tools/mesh_check.py)
 mesh-check: $(ROMFS_STAMP)
 	$(PYTHON) -I tools/mesh_check.py "$(ISO)" $(ROMFS_DIR)
+
+help:
+	@echo "Star 3D build targets (build.bat TARGET / ./build.sh TARGET / make TARGET):"
+	@echo "  all (default)  code-only .3dsx + .cia + out/star3d-gamedata.zip (needs the ISO)"
+	@echo "  code, 3dsx     the code-only .3dsx (no ISO needed)"
+	@echo "  cia            the code-only .cia (needs the ISO: the banner comes from it)"
+	@echo "  gamedata       out/star3d-gamedata.zip, the data for the SD card (needs the ISO)"
+	@echo "  sd-romfs       out/star3d-romfs.bin, the unpacked data file"
+	@echo "  full           .3dsx and .cia with the data embedded (single-file installs)"
+	@echo "  full-3dsx      the embedded .3dsx alone"
+	@echo "  full-cia       the embedded .cia alone"
+	@echo "  romfs          only extract/convert the data (no code images)"
+	@echo "  mesh-check     compare the reduced models against the disc"
+	@echo "  clean          remove all build outputs"
+	@echo "Variables: NO_CIA=1, NO_GAMEDATA=1, DATA_VERSION=N, PROFILE=1 (see README)"
 
 $(ROMFS_STAMP): $(ISO) $(CONVERT_SCRIPTS) $(TEXCONV_LIB) $(MESHSIMP_LIB) $(CONVERT_OPTIONS)
 	@if [ -z "$(ISO)" ]; then \
@@ -310,7 +350,25 @@ $(ROMFS_STAMP): $(ISO) $(CONVERT_SCRIPTS) $(TEXCONV_LIB) $(MESHSIMP_LIB) $(CONVE
 	fi
 	TEXCONV_LIB="$(if $(TEXCONV_LIB),$(abspath $(TEXCONV_LIB)))" TEX_QUALITY=$(TEX_QUALITY) TEX_MIPMAPS=$(TEX_MIPMAPS) \
 		TEX_SCALE=$(TEX_SCALE) VIDEO_SCALE=$(VIDEO_SCALE) MESHSIMP_LIB="$(if $(MESHSIMP_LIB),$(abspath $(MESHSIMP_LIB)))" POLY_REDUCE=$(POLY_REDUCE) \
-		POLY_MAX_ERROR=$(POLY_MAX_ERROR) $(PYTHON) -I tools/extract_disc.py "$(ISO)" $(ROMFS_DIR)
+		POLY_MAX_ERROR=$(POLY_MAX_ERROR) DATA_VERSION=$(DATA_VERSION) $(PYTHON) -I tools/extract_disc.py "$(ISO)" $(ROMFS_DIR)
+
+# Packs the extracted data into one file the game mounts from the SD card
+# (sdmc:/3ds/star3d/gamedata/romfs.bin, main.c): a code-only .3dsx/.cia runs
+# the full game with it. One big file keeps FAT32 and ftpd transfers simple.
+$(BUILD_ROOT)/sd/star3d-romfs.bin: $(ROMFS_STAMP)
+	@mkdir -p $(dir $@)
+	@echo "ROMFS $@"
+	@mkromfs3ds $(ROMFS_DIR) $@
+
+# Release zip: the data at its SD card location, so players extract the zip
+# once to the SD card's root and never touch it again. ZIP_STORED: the payload
+# is already-compressed ADPCM/ETC1 data, and not compressing again keeps the
+# step quick.
+../out/star3d-gamedata.zip: $(BUILD_ROOT)/sd/star3d-romfs.bin tools/make_gamedata_zip.py
+	@mkdir -p $(dir $@)
+	@echo "ZIP  $@"
+	@$(PYTHON) -I tools/make_gamedata_zip.py $@ 3ds/star3d/gamedata/romfs.bin=$(BUILD_ROOT)/sd/star3d-romfs.bin
+	@ls -la $@
 
 $(CONVERT_OPTIONS): FORCE
 	@mkdir -p $(dir $@)
@@ -463,14 +521,29 @@ $(BUILD_DIR)/icon.png: $(ROMFS_STAMP) tools/make_icon.py
 	@$(PYTHON) -I tools/make_icon.py $(ROMFS_DIR)/files/opening.bnr $@
 
 # The texts live in this rule, so it depends on the Makefile too: otherwise a
-# changed description never reaches an existing build directory
+# changed description never reaches an existing build directory. Without a
+# disc image there is no icon to build, so the rule is a no-op and the .3dsx
+# simply gets no title/icon (code-only test builds).
 SMDH_TITLE := Star 3D
 SMDH_DESCRIPTION := Star 3D a Foxhollow port made by Ezequiel
 SMDH_PUBLISHER := Ezequiel
-$(BUILD_DIR)/star3d.smdh: $(BUILD_DIR)/icon.png Makefile
-	@$(SMDHTOOL) --create "$(SMDH_TITLE)" "$(SMDH_DESCRIPTION)" "$(SMDH_PUBLISHER)" $< $@
+$(BUILD_DIR)/star3d.smdh: $(if $(ISO),$(BUILD_DIR)/icon.png,) Makefile
+	@mkdir -p $(dir $@)
+	@if [ -z "$(ISO)" ]; then \
+		echo "note: no disc image, $(notdir $@) skipped (the .3dsx gets no title/icon)"; \
+	else \
+		$(SMDHTOOL) --create "$(SMDH_TITLE)" "$(SMDH_DESCRIPTION)" "$(SMDH_PUBLISHER)" $(BUILD_DIR)/icon.png $@; \
+	fi
 
-$(BUILD_DIR)/star3d.3dsx: $(BUILD_DIR)/star3d.elf $(BUILD_DIR)/relocs.ok $(BUILD_DIR)/star3d.smdh $(ROMFS_STAMP)
+# Code-only image (the default): the game data comes from the SD card
+# (sdmc:/3ds/star3d/gamedata/romfs.bin, main.c).
+$(BUILD_DIR)/star3d.3dsx: $(BUILD_DIR)/star3d.elf $(BUILD_DIR)/relocs.ok $(BUILD_DIR)/star3d.smdh
+	@echo "3DSX $@ (code only)"
+	@$(3DSXTOOL) $< $@ $(if $(wildcard $(BUILD_DIR)/star3d.smdh),--smdh=$(BUILD_DIR)/star3d.smdh,)
+
+# Embedded image (make full): the whole data inside the file, no SD gamedata
+# needed. This is the old behaviour, at the old several-hundred-MB size.
+$(BUILD_DIR)/star3d-full.3dsx: $(BUILD_DIR)/star3d.elf $(BUILD_DIR)/relocs.ok $(BUILD_DIR)/star3d.smdh $(ROMFS_STAMP)
 	@echo "3DSX $@ (with game data)"
 	@$(3DSXTOOL) $< $@ --smdh=$(BUILD_DIR)/star3d.smdh --romfs=$(ROMFS_DIR)
 
@@ -505,18 +578,26 @@ $(BUILD_DIR)/banner.bnr: $(BUILD_DIR)/banner.png
 	@$(BANNERTOOL) makebanner $(if $(filter 1,$(BANNER_3D)),-ci $(BUILD_DIR)/banner.cgfx,-i $<) \
 		-a $(BUILD_DIR)/banner.wav -o $@
 
-# Installable title: same ELF and RomFS, New 3DS memory/clock settings in the RSF
+# Installable title, code only: no RomFS (star3d.rsf has no RomFs section),
+# so the .cia stays a few MB and the game data comes from the SD card.
+# The banner still comes from the disc, hence the ROMFS_STAMP dependency.
 $(BUILD_DIR)/star3d.cia: $(BUILD_DIR)/star3d.elf $(BUILD_DIR)/relocs.ok $(BUILD_DIR)/star3d.smdh $(BUILD_DIR)/banner.bnr \
-                         $(ROMFS_STAMP) tools/cia/star3d.rsf
+                         tools/cia/star3d.rsf
 	@if [ -z "$(MAKEROM)" ]; then echo "error: makerom not found (build with Docker: build.bat / build.sh)" >&2; exit 1; fi
-	@echo "CIA $@"
+	@echo "CIA $@ (code only)"
 	@$(MAKEROM) -f cia -o $@ -target t -elf $(BUILD_DIR)/star3d.elf -rsf tools/cia/star3d.rsf \
 		-icon $(BUILD_DIR)/star3d.smdh -banner $(BUILD_DIR)/banner.bnr \
-		-DAPP_ROMFS=$(ROMFS_DIR) -DAPP_UNIQUE_ID=$(APP_UNIQUE_ID)
+		-DAPP_UNIQUE_ID=$(APP_UNIQUE_ID)
 
-$(BUILD_DIR)/star3d-nodata.3dsx: $(BUILD_DIR)/star3d.elf $(BUILD_DIR)/relocs.ok
-	@echo "3DSX $@ (no game data)"
-	@$(3DSXTOOL) $< $@
+# Installable title with the data embedded (make full), same New 3DS
+# memory/clock settings.
+$(BUILD_DIR)/star3d-full.cia: $(BUILD_DIR)/star3d.elf $(BUILD_DIR)/relocs.ok $(BUILD_DIR)/star3d.smdh $(BUILD_DIR)/banner.bnr \
+                              $(ROMFS_STAMP) tools/cia/star3d-full.rsf
+	@if [ -z "$(MAKEROM)" ]; then echo "error: makerom not found (build with Docker: build.bat / build.sh)" >&2; exit 1; fi
+	@echo "CIA $@ (with game data)"
+	@$(MAKEROM) -f cia -o $@ -target t -elf $(BUILD_DIR)/star3d.elf -rsf tools/cia/star3d-full.rsf \
+		-icon $(BUILD_DIR)/star3d.smdh -banner $(BUILD_DIR)/banner.bnr \
+		-DAPP_ROMFS=$(ROMFS_DIR) -DAPP_UNIQUE_ID=$(APP_UNIQUE_ID)
 
 ### Clean target ###
 clean:

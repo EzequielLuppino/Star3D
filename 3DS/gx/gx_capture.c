@@ -7,7 +7,7 @@
 // in-memory files), so a mark never stalls the frame for the SD card. Bug 40:
 // the capture used to write everything inline on the render thread (per-line
 // state dumps, per-state texture dumps, BMPs, copy PPMs) while the game
-// streamed romfs.bin and the log writer flushed; the SD card's commits stall
+// streamed gamedata/romfs.bin and the log writer flushed; the SD card's commits stall
 // for seconds each, the frame froze for up to 85 s, and the kernel took a
 // deterministic prefetch abort while the fs module was current (9 identical
 // dumps). See BUG40_CAPTURE_CRASH.md.

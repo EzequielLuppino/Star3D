@@ -158,6 +158,19 @@ static void migrate_data_dir(void) {
             : "copy of saves from " OLD_DATA_DIR "/card incomplete";
 }
 
+// Mounts a packed game data file (romfs.bin) from the SD card as "romfs:".
+// Returns the open or the mount error, whichever failed.
+static Result mount_sd_romfs(const u16* path, u32 path_size) {
+    FS_Path archPath = { PATH_EMPTY, 1, "" };
+    FS_Path filePath = { PATH_UTF16, path_size, path };
+    Handle fd = 0;
+    Result orc = FSUSER_OpenFileDirectly(&fd, ARCHIVE_SDMC, archPath, filePath, FS_OPEN_READ, 0);
+    if (R_FAILED(orc)) return orc;
+    Result rc = romfsMountFromFile(fd, 0, "romfs");
+    if (R_FAILED(rc)) FSFILE_Close(fd);
+    return rc;
+}
+
 int main(void) {
     // Enable New 3DS clock speed if available
     osSetSpeedupEnable(true);
@@ -211,34 +224,31 @@ int main(void) {
 
     port_os_init();
 
-    // Game data: the disc is extracted into the RomFS at build time. A data
-    // file on the SD card (sdmc:/3ds/star3d/romfs.bin, from out/star3d-romfs.bin)
-    // is preferred: then a code-only .3dsx (the "code" target) runs the full
-    // game, so console tests only transfer the small code image over 3dslink
-    // instead of the several-hundred-MB data blob every time.
-    Result rc = 0xFFFFFFFF;
-    {
-        static const u16 sd_romfs_path[] = u"/3ds/star3d/romfs.bin";
-        FS_Path archPath = { PATH_EMPTY, 1, "" };
-        FS_Path filePath = { PATH_UTF16, sizeof(sd_romfs_path), sd_romfs_path };
-        Handle fd = 0;
-        Result orc = FSUSER_OpenFileDirectly(&fd, ARCHIVE_SDMC, archPath, filePath, FS_OPEN_READ, 0);
-        if (R_SUCCEEDED(orc)) {
-            rc = romfsMountFromFile(fd, 0, "romfs");
-            if (R_FAILED(rc)) {
-                LOG_WARN("init", "SD romfs mount failed (0x%08lX): using the embedded data", (unsigned)rc);
-                FSFILE_Close(fd);
-            } else {
-                LOG_INFO("init", "game data: sdmc:/3ds/star3d/romfs.bin");
-            }
+    // Game data: no regular build embeds it any more; it lives on the SD card
+    // (sdmc:/3ds/star3d/gamedata/romfs.bin, extracted once from the release
+    // file star3d-gamedata.zip). The SD file also wins over an embedded RomFS
+    // (the "full" builds), so data updates work without reinstalling the
+    // image. The old location (sdmc:/3ds/star3d/romfs.bin) still works.
+    static const u16 gamedata_path[] = u"/3ds/star3d/gamedata/romfs.bin";
+    static const u16 legacy_romfs_path[] = u"/3ds/star3d/romfs.bin";
+    Result rc = mount_sd_romfs(gamedata_path, sizeof(gamedata_path));
+    if (R_SUCCEEDED(rc)) {
+        LOG_INFO("init", "game data: sdmc:/3ds/star3d/gamedata/romfs.bin");
+    } else {
+        Result legacy_rc = mount_sd_romfs(legacy_romfs_path, sizeof(legacy_romfs_path));
+        if (R_SUCCEEDED(legacy_rc)) {
+            rc = legacy_rc;
+            LOG_WARN("init", "game data: sdmc:/3ds/star3d/romfs.bin (legacy location; move it to gamedata/romfs.bin)");
         } else {
-            LOG_INFO("init", "SD romfs open failed (0x%08lX)", (unsigned)orc);
+            LOG_INFO("init", "no game data on the SD card (0x%08X): using the embedded data, if any", (unsigned)rc);
         }
     }
     if (R_FAILED(rc)) {
         rc = romfsInit();
         if (R_FAILED(rc)) {
-            LOG_ERROR("init", "romfsInit failed (0x%08lX): this build has no game data", rc);
+            LOG_ERROR("init", "no game data (0x%08X): this build embeds none and the SD card has none. "
+                              "Extract the release file star3d-gamedata.zip to the SD card's root "
+                              "(sdmc:/3ds/star3d/gamedata/romfs.bin)", (unsigned)rc);
         }
     }
     if (R_SUCCEEDED(rc)) {
@@ -246,11 +256,30 @@ int main(void) {
         // only covers the code, this tells data variants apart
         FILE* f = fopen("romfs:/data_info.txt", "r");
         char line[160];
-        if (f && fgets(line, sizeof(line), f)) {
+        long data_version = -1;
+        while (f && fgets(line, sizeof(line), f)) {
+            if (!strncmp(line, "data_version ", 13)) {
+                data_version = strtol(line + 13, NULL, 10);
+                continue;
+            }
             line[strcspn(line, "\r\n")] = 0;
             LOG_INFO("init", "game data: %s", line);
         }
         if (f) fclose(f);
+        // The compiled-in version (DATA_VERSION in the Makefile): old data
+        // under a new build is the usual mismatch after an update that forgot
+        // to refresh the gamedata folder (RELEASING.md)
+        if (data_version < 0) {
+            LOG_WARN("init", "game data has no version marker (made before the gamedata split)");
+#ifdef S3D_DATA_VERSION
+        } else if (data_version < S3D_DATA_VERSION) {
+            LOG_ERROR("init", "game data is OLDER than this build (data %ld, build %d): "
+                              "update sdmc:/3ds/star3d/gamedata/ from the newest star3d-gamedata.zip",
+                      data_version, (int)S3D_DATA_VERSION);
+        } else if (data_version > S3D_DATA_VERSION) {
+            LOG_WARN("init", "game data is newer than this build (data %ld, build %d)", data_version, (int)S3D_DATA_VERSION);
+#endif
+        }
     }
 
     if (!gx_init()) {

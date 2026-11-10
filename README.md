@@ -10,8 +10,11 @@ own backend is Aurora). Star 3D is a foxhollow port made by Ezequiel.
 
 **No game data is included.** You need your own legally dumped disc image of
 the game: the PAL release, game ID **GSAP01, revision 1**. The image is only
-read at build time. Its files are extracted and converted, then embedded in
-the output.
+read at build time. Its files are extracted and converted into a game data
+file that the game loads from the SD card (`sdmc:/3ds/star3d/gamedata/`), so
+the installable `.cia` and the `.3dsx` stay small: the data is put on the SD
+card **once**, and later releases are small images installed over the old
+ones (see [Updating](#updating)).
 
 ## Features
 
@@ -88,10 +91,32 @@ plain ISO, for example with Dolphin (right-click the game > Convert File > ISO).
   For the `.cia`, put `makerom` on your `PATH`.
 
 The first build takes a few minutes, most of it extracting and converting the
-game data. Later builds only recompile what changed. `make code` (or
-`build.bat code` / `./build.sh code`) builds the code without game data,
-so no ISO is needed. The Docker image is pinned by digest, so builds are
-reproducible.
+game data. Later builds only recompile what changed. The Docker image is
+pinned by digest, so builds are reproducible.
+
+### Targets and options
+
+`make TARGET` natively, or `build.bat TARGET` / `./build.sh TARGET` with
+Docker (`make help` lists everything):
+
+| Target | Output |
+| --- | --- |
+| `all` (default) | the release set: code-only `out/star3d.3dsx` + `out/star3d.cia` + `out/star3d-gamedata.zip` (needs the ISO) |
+| `code`, `3dsx` | the code-only `.3dsx` (no ISO needed) |
+| `cia` | the code-only `.cia` (needs the ISO: the HOME Menu banner comes from it) |
+| `gamedata` | `out/star3d-gamedata.zip`, the game data for the SD card |
+| `sd-romfs` | `out/star3d-romfs.bin`, the unpacked data file |
+| `full` | `star3d-full.3dsx` + `star3d-full.cia`, the data embedded (single-file installs, the old behaviour) |
+| `full-3dsx`, `full-cia` | one embedded variant |
+| `romfs` | only extract and convert the game data, no code images |
+| `mesh-check` | compare the reduced models against the disc |
+| `clean` | remove build outputs |
+
+Variables: `NO_CIA=1` skips the `.cia`, `NO_GAMEDATA=1` skips the data zip
+(quick test builds: `make -C 3DS code NO_CIA=1 NO_GAMEDATA=1`, or
+`docker run --rm -e NO_CIA=1 -e NO_GAMEDATA=1 -v "<repo>:/workspace"
+star3d-builder`). `DATA_VERSION=N` is the game data version, see
+[RELEASING.md](RELEASING.md).
 
 For a profiling build, add `PROFILE=1` (for example `./build.sh PROFILE=1`).
 It writes a per-zone timing breakdown of the graphics code and selected game
@@ -145,18 +170,21 @@ against the disc (only display lists changed, every asset still present).
 
 ### Output
 
-- Docker: `out/star3d.3dsx`, `out/star3d.cia` and `out/star3d.elf` (symbols,
-  for the crash addresses in the log).
-- Native: `3DS/build/us_3ds/star3d.3dsx` (and `.cia` / `.elf`).
+- Docker: `out/star3d.3dsx` and `out/star3d.cia` (both code only, a few MB),
+  `out/star3d-gamedata.zip` (the game data, ~730 MB) and `out/star3d.elf`
+  (symbols, for the crash addresses in the log).
+- Native: `3DS/build/us_3ds/star3d.3dsx` (and `.cia` / `.elf`); the data zip
+  lands in `out/` as well.
 
-The `.3dsx` and `.cia` files are large (several hundred MB) because the game
-data is embedded.
+The `.3dsx` and `.cia` no longer contain the game data: the data is unpacked
+from `star3d-gamedata.zip` to the SD card once (see
+[Installing](#installing)). `make full` still builds the old-style images
+with everything embedded (`star3d-full.3dsx` / `star3d-full.cia`).
 
-For quick test builds, skip the `.cia` (packing it takes a while):
-`NO_CIA=1` on the make command line natively, or
-`docker run --rm -e NO_CIA=1 -v "<repo>:/workspace" star3d-builder` with Docker.
-The Docker build then removes any older `out/star3d.cia`, so only the fresh
-`.3dsx` is left to copy.
+For quick test builds, skip the `.cia` and the data zip (packing takes a
+while): `NO_CIA=1 NO_GAMEDATA=1` on the make command line natively, or
+`docker run --rm -e NO_CIA=1 -e NO_GAMEDATA=1 -v "<repo>:/workspace"
+star3d-builder` with Docker.
 
 The `.cia` has a 3D HOME Menu banner: the game's textured Arwing model in
 front of a starfield and the title, built from your disc at build time
@@ -166,33 +194,51 @@ banner instead.
 
 ## Installing
 
+- **Game data (once per SD card):** extract `star3d-gamedata.zip` to the SD
+  card's **root**. It unpacks to `sdmc:/3ds/star3d/gamedata/romfs.bin`. Do
+  this before the first start; later releases reuse it (see
+  [Updating](#updating)).
 - **.3dsx:** copy `star3d.3dsx` to `/3ds/` on the SD card and start it from
   the Homebrew Launcher.
 - **.cia:** install `star3d.cia` with [FBI](https://github.com/Steveice10/FBI)
   (or another title manager). It then appears on the HOME Menu.
 - **Azahar emulator:** File > Load File, pick `star3d.3dsx`, and select the
-  New 3DS model in the settings.
+  New 3DS model in the settings. Put the `gamedata` folder on the emulated SD
+  card the same way as on real hardware.
 
 Sound needs the DSP firmware at `sdmc:/3ds/dspfirm.cdc`. Dump it from your
 console with DSP1. Without it the game runs silently.
 
+## Updating
+
+The code and the game data are released separately, so updates work like
+this:
+
+- **New build, same data (the usual case):** install the new `star3d.cia`
+  over the old one with FBI, or replace `star3d.3dsx`. Saves and the
+  `gamedata` folder are untouched.
+- **The data changed too:** the release notes say so. Extract the new
+  `star3d-gamedata.zip` to the SD root, replacing `gamedata/romfs.bin`.
+  If a build ever runs with older data, the log says
+  `game data is OLDER than this build (data N, build M)`
+  (the log keeps errors even with logging off).
+
 ## Testing on a console over the network
 
-The game data can live on the SD card instead of inside the .3dsx
-(`sdmc:/3ds/star3d/romfs.bin`), so test builds only transfer the code image
-(3.4 MB) instead of the whole data blob (~850 MB) every time:
+No regular build embeds the game data any more, so test builds already
+transfer only the code image (3.4 MB) over 3dslink instead of the whole data
+blob (~730 MB):
 
-1. Build the data file once: `make -C 3DS sd-romfs` (needs the ISO) →
-   `out/star3d-romfs.bin`. Push it to `sdmc:/3ds/star3d/romfs.bin` on the
-   console's SD (e.g. with ftpd over FTP). The full `.3dsx`/`.cia` builds
-   still embed the data; the SD file only overrides it when present.
-2. Build the code-only image: `make -C 3DS code` → `out/star3d-nodata.3dsx`
-   (or `3DS/build-docker/us_3ds/star3d-nodata.3dsx` from a Docker build).
+1. Put the data on the SD once: extract the release `star3d-gamedata.zip` to
+   the SD root, or build the data file yourself (`make -C 3DS sd-romfs`,
+   needs the ISO → `out/star3d-romfs.bin`) and push it to
+   `sdmc:/3ds/star3d/gamedata/romfs.bin` (e.g. with ftpd over FTP).
+2. Build the code-only image: `make -C 3DS code` → `out/star3d.3dsx`.
 3. On the console, open the Homebrew Launcher and press Y ("Waiting for
    3dslink...").
-4. Send it: `3dslink -a <console-ip> out/star3d-nodata.3dsx` (in the Docker
-   image: `docker run --rm --network=host -v "$PWD:/workspace" star3d-builder
-   3dslink -a <ip> /workspace/out/star3d-nodata.3dsx`).
+4. Send it: `3dslink -a <console-ip> out/star3d.3dsx` (in the Docker image:
+   `docker run --rm --network=host -v "$PWD:/workspace" star3d-builder
+   3dslink -a <ip> /workspace/out/star3d.3dsx`).
 5. The log lands at `sdmc:/3ds/star3d/Star3D.log`; fetch it over FTP. Remote
    commands in `sdmc:/3ds/star3d/cmd.txt` (port/remote_3ds.c: `set`, `warp`,
    `warpmap`, `mark` — `mark` also writes a render capture folder) can be
@@ -211,7 +257,8 @@ default 8080) starts a tiny server on core 3 (port/netsrv_3ds.c):
   is picked up immediately)
 - `PUT /app.3dsx` — a new code image, written to `sdmc:/3ds/star3d.3dsx`
   where the Homebrew Launcher can also start it directly
-- `PUT /romfs.bin` — new game data (big upload, only when assets change)
+- `PUT /romfs.bin` — new game data, written to
+  `sdmc:/3ds/star3d/gamedata/romfs.bin` (big upload, only when assets change)
 - `GET /restart` — relaunch the app with the `PUT /app.3dsx` build through
   Rosalina's hb:ldr service (the mechanism hbmenu itself uses), so a full
   update cycle is hands-off: upload the new build, restart, and the game
@@ -222,7 +269,8 @@ default 8080) starts a tiny server on core 3 (port/netsrv_3ds.c):
 Console gotchas (both cost debugging time):
 
 - hbmenu shows a `/3ds/star3d/` **folder** as its own entry. Keep exactly one
-  `star3d.3dsx` at `/3ds/` root and no `.3dsx` inside the data folder, or the
+  `star3d.3dsx` at `/3ds/` root and no `.3dsx` inside the data folder
+  (`/3ds/star3d/` holds `env.txt`, the saves and `gamedata/`), or the
   wrong (old) build gets launched from the folder entry.
 - The ftpd app can serve cached file contents: after an FTP upload, the
   download-back may show the new bytes while the real SD still holds the old
@@ -354,6 +402,7 @@ options byte (`languageIndex`, the US layout's `pad01`), and `OSGetLanguage`
 
 | Path | Contents |
 | --- | --- |
+| `sdmc:/3ds/star3d/gamedata/romfs.bin` | Game data, from `star3d-gamedata.zip` extracted to the SD root |
 | `sdmc:/3ds/star3d/card/` | Saves (`Star 3D.bin`, `Star 3D.stat`) |
 | `sdmc:/3ds/star3d/env.txt` | Optional runtime switches, one `NAME=value` per line |
 | `sdmc:/3ds/star3d/settings.txt` | Touch screen settings (`env.txt` wins over it) |
@@ -368,6 +417,14 @@ full list. Press START+SELECT to quit.
 Data from older builds (`sdmc:/3ds/sfa_port/`) is moved to the new folder
 automatically on the first start.
 
+## Making a release
+
+Releases are built with Docker: `./build.sh` produces the three release files
+— `out/star3d.3dsx`, `out/star3d.cia` and `out/star3d-gamedata.zip` (plus
+`out/star3d.elf` for crash symbols) — which are uploaded to GitHub releases
+as-is. The full workflow, including when to bump `DATA_VERSION` and how
+players update, is in [RELEASING.md](RELEASING.md).
+
 ## Repository layout
 
 - `3DS/`: the port, made up of the Makefile, the Stellaris engine (the 3DS
@@ -377,6 +434,7 @@ automatically on the first start.
   are applied at build time from `3DS/patches/`.
 - `SFA-Decomp/`: submodule with the decompilation, used for reference and by
   `3DS/tools/probe_layout.sh`.
+- `RELEASING.md`: how the decoupled releases are put together and shipped.
 
 ## Credits
 

@@ -1,5 +1,11 @@
-# makerom specification for the installable (CIA) build. Values in $(...) are
-# passed by the Makefile (-DAPP_ROMFS=..., -DAPP_UNIQUE_ID=...).
+# makerom specification for the installable (CIA) build, code only: no RomFs
+# section, so the .cia stays a few MB and the game data comes from the SD card
+# (sdmc:/3ds/star3d/gamedata/romfs.bin, extracted once from
+# star3d-gamedata.zip). Values in $(...) are passed by the Makefile
+# (-DAPP_UNIQUE_ID=...).
+#
+# star3d-full.rsf (the variant with the data embedded) must stay in sync with
+# this file apart from its RomFs section.
 #
 # Compared with the .3dsx (which runs inside whatever memory mode the
 # Homebrew Launcher's host title got), the CIA asks for the New 3DS extended
@@ -9,9 +15,6 @@ BasicInfo:
   Title                   : "Star 3D"
   ProductCode             : "CTR-H-S3DP"
   Logo                    : Homebrew
-
-RomFs:
-  RootPath                : $(APP_ROMFS)
 
 TitleInfo:
   Category                : Application

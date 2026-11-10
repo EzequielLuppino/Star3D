@@ -22,7 +22,8 @@ stay in GameCube formats and the game converts them at runtime. Models
 mesh_reduce.py and the native simplifier (MESHSIMP_LIB=path/to/libmeshsimp.so,
 POLY_REDUCE=percent of triangles removed, 0 = off, default 50, POLY_MAX_ERROR=fraction). The attract
 movie is converted by video_convert.py (needs Pillow; skipped without it), its
-audio by movie_audio_convert.py.
+audio by movie_audio_convert.py. DATA_VERSION=N is written to data_info.txt
+so the game can compare the data against the code that built it (Makefile).
 
 The extraction is skipped when the ISO, the conversion scripts and these
 options are unchanged.
@@ -111,6 +112,7 @@ def conversion_options():
         "meshsimp": bool(mesh_lib) and os.path.isfile(mesh_lib),
         "poly_reduce": int(os.environ.get("POLY_REDUCE", "50") or 0),
         "poly_max_error": float(os.environ.get("POLY_MAX_ERROR", "0.05") or 0.05),
+        "data_version": int(os.environ.get("DATA_VERSION", "1") or 1),
     }
 
 # MusyX sample banks: the directory (.sdi) and sample data (.sam) are converted together
@@ -276,6 +278,7 @@ def main():
         if opts["tex_scale"] > 0:
             tex += f" 1/{1 << opts['tex_scale']}"
         f.write(f"textures {tex}, mipmaps {int(opts['tex_mipmaps'])}, polygon reduction {poly}\n")
+        f.write(f"data_version {opts['data_version']}\n")
     with open(stamp_path, "w") as f:
         json.dump(stamp, f)
     print(f"extract_disc: {count} files, {total / 2**20:.1f} MB on disc, {stored / 2**20:.1f} MB in RomFS")

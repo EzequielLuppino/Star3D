@@ -19,7 +19,8 @@
 //   PUT  /cmd.txt /env.txt /settings.txt   write the file (Content-Length)
 //   PUT  /app.3dsx             write sdmc:/3ds/star3d.3dsx (new build, visible
 //                              to the Homebrew Launcher)
-//   PUT  /romfs.bin            write sdmc:/3ds/star3d/romfs.bin (game data)
+//   PUT  /romfs.bin            write sdmc:/3ds/star3d/gamedata/romfs.bin
+//                              (game data)
 //   GET  /restart              relaunch the app (Rosalina hb:ldr target =
 //                              the /app.3dsx build; falls back to a plain exit
 //                              back to the Homebrew Launcher)
@@ -36,6 +37,7 @@
 #include <strings.h>
 #include <sys/select.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/time.h>
 #include <unistd.h>
 
@@ -439,7 +441,8 @@ static void handle(int c) {
     }
     if (!strcmp(name, "romfs.bin")) {
         char full[160];
-        snprintf(full, sizeof(full), DATA_DIR "/romfs.bin");
+        snprintf(full, sizeof(full), DATA_DIR "/gamedata/romfs.bin");
+        mkdir(DATA_DIR "/gamedata", 0777);  // first push: the folder may not exist yet
         bool ok = save_body(c, full, clen, pending_len > 0, body, pending_len);
         LOG_WARN("netsrv", "PUT romfs.bin (%u bytes): %s", (unsigned)clen, ok ? "ok" : "failed");
         respond(c, ok ? "200 OK" : "500 Internal Error", ok ? "saved\n" : "write failed\n");
