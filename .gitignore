@@ -94,3 +94,4 @@ desktop.ini
 # (exceptions to the *.png / *.wav rules above)
 !3DS/tools/ci/*
 !dist/universal-db/*
+!dist/qr/*
