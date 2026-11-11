@@ -44,8 +44,10 @@ ISO_ARG=()
 
 make -j"$(nproc)" BUILD_ROOT=build-docker "${ISO_ARG[@]}" "$@"
 
-# Keep out/ current. make's gamedata/sd-romfs targets already write to out/
-# themselves; cp -u only refreshes when the build is newer.
+# Keep out/ current: copy every product of this build (cp -u refreshes only
+# when the build output is newer). make's gamedata/sd-romfs targets already
+# write to out/ themselves. Works for any target, so "3dsx" or "cia" alone
+# also land in out/.
 mkdir -p "$WORKSPACE/out"
 collect() {  # $1 = path under 3DS/, $2 = name in out/
     if [ -f "$1" ]; then
@@ -54,29 +56,27 @@ collect() {  # $1 = path under 3DS/, $2 = name in out/
     fi
 }
 
-if { [ $# -eq 0 ] || [ "$1" = "all" ]; }; then
-    collect build-docker/us_3ds/star3d.3dsx star3d.3dsx
-    collect build-docker/us_3ds/star3d.elf star3d.elf
-    # The pre-decoupling name of the code-only image (star3d.3dsx is it now)
-    rm -f "$WORKSPACE/out/star3d-nodata.3dsx"
-    if [ "${NO_CIA:-0}" = "1" ]; then
-        # Do not leave an older .cia next to the new .3dsx
-        rm -f "$WORKSPACE/out/star3d.cia"
-        echo "      (.cia skipped: NO_CIA=1)"
-    else
-        collect build-docker/us_3ds/star3d.cia star3d.cia
-    fi
-    if [ "${NO_GAMEDATA:-0}" = "1" ]; then
-        rm -f "$WORKSPACE/out/star3d-gamedata.zip"
-        echo "      (gamedata zip skipped: NO_GAMEDATA=1)"
-    fi
+# The pre-decoupling name of the code-only image (star3d.3dsx is it now)
+rm -f "$WORKSPACE/out/star3d-nodata.3dsx"
+collect build-docker/us_3ds/star3d.3dsx star3d.3dsx
+collect build-docker/us_3ds/star3d.elf star3d.elf
+collect build-docker/sd/star3d-romfs.bin star3d-romfs.bin
+# NO_CIA / NO_GAMEDATA only apply to the full build ("all" or no arguments):
+# there, an older .cia / data zip must not stay next to the new build that
+# skipped them
+if [ "${NO_CIA:-0}" = "1" ] && { [ $# -eq 0 ] || [ "$1" = "all" ]; }; then
+    rm -f "$WORKSPACE/out/star3d.cia"
+    echo "      (.cia skipped: NO_CIA=1)"
+else
+    collect build-docker/us_3ds/star3d.cia star3d.cia
+fi
+if [ "${NO_GAMEDATA:-0}" = "1" ] && { [ $# -eq 0 ] || [ "$1" = "all" ]; }; then
+    rm -f "$WORKSPACE/out/star3d-gamedata.zip"
+    echo "      (gamedata zip skipped: NO_GAMEDATA=1)"
 fi
 
-# The unpacked data file lands in out/ too
-collect build-docker/sd/star3d-romfs.bin star3d-romfs.bin
-
 echo
-echo "Release set (make all):"
+echo "Out (what this build produced):"
 echo "  out/star3d.3dsx          code only, copy to /3ds/ on the SD card"
 echo "  out/star3d.cia           code only, install with FBI"
 echo "  out/star3d-gamedata.zip  extract once to the SD card's root"
