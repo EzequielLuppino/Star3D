@@ -17,6 +17,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # the tag builds create GitHub releases
     # The same pinned image as the Dockerfile, so CI and local builds use the
     # exact same toolchain
     container:

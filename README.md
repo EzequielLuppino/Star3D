@@ -128,12 +128,13 @@ flat committed banner (no Arwing); local builds with the ISO still make the
 release by hand. Details: [RELEASING.md](RELEASING.md).
 
 The project is prepared for
-[Universal-Updater](https://github.com/Universal-Team/Universal-Updater)
-(`dist/universal-db/`): once the entry is accepted, players install and
-update the code straight from the store — still with the game data produced
-from their own disc. A browser converter for the game data (like the Simpsons
-Hit & Run 3DS builder) is planned but not built yet, see
-`3DS/WEB_CONVERTER_PLAN.md`.
+[Universal-Updater](https://github.com/Universal-Team/Universal-Updater) in
+two ways: a custom UniStore hosted in this repository
+(`dist/unistore/star3d.unistore`, added by scanning the QR above), and the
+default-store entry in `dist/universal-db/` (pending review, see its README).
+Both install the code only — the game data still comes from the player's own
+disc. A browser converter for the game data (like the Simpsons Hit & Run 3DS
+builder) is planned but not built yet, see `3DS/WEB_CONVERTER_PLAN.md`.
 
 For a profiling build, add `PROFILE=1` (for example `./build.sh PROFILE=1`).
 It writes a per-zone timing breakdown of the graphics code and selected game
@@ -210,6 +211,15 @@ front of a starfield and the title, built from your disc at build time
 banner instead.
 
 ## Installing
+
+The code images are on the
+[latest release](https://github.com/EzequielLuppino/Star3D/releases/latest).
+Two ways to install the `.cia`, straight from the console:
+
+| **FBI**: Remote Install → Scan QR Code | <img src="dist/qr/fbi-install-qr.png" width="160"> |
+| **Universal-Updater**: Settings → Select UniStore → + → scan this | <img src="dist/qr/universal-updater-qr.png" width="160"> |
+
+Or by hand:
 
 - **Game data (once per SD card):** extract `star3d-gamedata.zip` to the SD
   card's **root**. It unpacks to `sdmc:/3ds/star3d/gamedata/romfs.bin`. Do

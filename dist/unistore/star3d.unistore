@@ -1,0 +1,31 @@
+{
+  "storeInfo": {
+    "title": "Star 3D",
+    "author": "EzequielLuppino",
+    "url": "https://raw.githubusercontent.com/EzequielLuppino/Star3D/main/dist/unistore/star3d.unistore",
+    "file": "star3d.unistore",
+    "description": "Code updates for the Star 3D port (the unofficial New 3DS port of a 2002 GameCube game). NOT the game data: the game needs sdmc:/3ds/star3d/gamedata/romfs.bin on the SD card, made from your own disc image - see https://github.com/EzequielLuppino/Star3D for how. The update installs over the existing game; on its own it does not run.",
+    "version": 1,
+    "revision": 1
+  },
+  "storeContent": [
+    {
+      "info": {
+        "title": "Star 3D (code update)",
+        "author": "EzequielLuppino",
+        "version": "latest",
+        "category": ["game"],
+        "console": ["3DS"],
+        "description": "The newest Star 3D code, installed over the game already on the console. REQUIRES the game data on the SD card first (sdmc:/3ds/star3d/gamedata/romfs.bin, from your own disc image)."
+      },
+      "Install the latest update (CIA)": [
+        {"type": "downloadFile", "file": "https://github.com/EzequielLuppino/Star3D/releases/latest/download/star3d.cia", "output": "/star3d.cia", "message": "Downloading the update..."},
+        {"type": "installCia", "file": "/star3d.cia", "message": "Installing..."},
+        {"type": "deleteFile", "file": "/star3d.cia"}
+      ],
+      "Install for the Homebrew Launcher (.3dsx)": [
+        {"type": "downloadFile", "file": "https://github.com/EzequielLuppino/Star3D/releases/latest/download/star3d.3dsx", "output": "/3ds/star3d.3dsx", "message": "Downloading the .3dsx..."}
+      ]
+    }
+  ]
+}
