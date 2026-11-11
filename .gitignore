@@ -89,3 +89,8 @@ settings.txt
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Committed art: the disc-free CI banner/icon and the Universal-DB entry art
+# (exceptions to the *.png / *.wav rules above)
+!3DS/tools/ci/*
+!dist/universal-db/*

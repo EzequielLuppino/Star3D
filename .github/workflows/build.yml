@@ -1,0 +1,74 @@
+# Builds the code-only .3dsx and .cia (no disc image needed: the banner and
+# icon fall back to the committed tools/ci/ assets). The game data
+# (star3d-gamedata.zip) cannot be built here - it needs the ISO - and is
+# attached to releases manually, see RELEASING.md.
+#
+# - push to main / pull requests: build + upload artifacts
+# - tag v*: build + create a GitHub release with the three files
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # The same pinned image as the Dockerfile, so CI and local builds use the
+    # exact same toolchain
+    container:
+      image: devkitpro/devkitarm:20260610@sha256:116afba8df8453961de2936ffab20dd441edf4d682856c1ec8b0e53d7ed0bbf5
+      env:
+        DEVKITPRO: /opt/devkitpro
+        DEVKITARM: /opt/devkitpro/devkitARM
+        PATH: /opt/devkitpro/devkitARM/bin:/opt/devkitpro/tools/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build extras (Pillow, makerom, bannertool)
+        run: |
+          set -e
+          apt-get update
+          apt-get install -y --no-install-recommends python3-pil
+          git clone https://github.com/3DSGuy/Project_CTR.git /tmp/ctr
+          git -C /tmp/ctr checkout e8f5f529c54ff9b22a2491a480ffa69206bf7b19
+          make -C /tmp/ctr/makerom -j"$(nproc)" deps
+          make -C /tmp/ctr/makerom -j"$(nproc)" program
+          install -m 755 /tmp/ctr/makerom/bin/makerom /usr/local/bin/makerom
+          rm -rf /tmp/ctr
+          git clone https://github.com/diasurgical/bannertool.git /tmp/bannertool
+          git -C /tmp/bannertool checkout 16d8c5a0ce02a5e06e64ab42275132fca57c04a2
+          git -C /tmp/bannertool submodule update --init
+          make -C /tmp/bannertool -j"$(nproc)"
+          install -m 755 /tmp/bannertool/output/linux-x86_64/bannertool /usr/local/bin/bannertool
+          rm -rf /tmp/bannertool
+
+      - name: Build code images
+        run: make -C 3DS -j"$(nproc)" BUILD_ROOT=build-ci PYTHON=python3 3dsx cia
+
+      - name: Upload artifacts
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: star3d-${{ github.sha }}
+          if-no-files-found: error
+          path: |
+            3DS/build-ci/us_3ds/star3d.3dsx
+            3DS/build-ci/us_3ds/star3d.cia
+            3DS/build-ci/us_3ds/star3d.elf
+
+      - name: Create GitHub release (tags only)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            3DS/build-ci/us_3ds/star3d.3dsx
+            3DS/build-ci/us_3ds/star3d.cia
+            3DS/build-ci/us_3ds/star3d.elf

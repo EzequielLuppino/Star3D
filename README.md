@@ -118,6 +118,23 @@ Variables: `NO_CIA=1` skips the `.cia`, `NO_GAMEDATA=1` skips the data zip
 star3d-builder`). `DATA_VERSION=N` is the game data version, see
 [RELEASING.md](RELEASING.md).
 
+### Automatic builds and Universal-Updater
+
+GitHub Actions builds the code images on every push to `main` and, on `v*`
+tags, creates a GitHub release with `star3d.3dsx`, `star3d.cia` and
+`star3d.elf` automatically. CI has no disc image, so those `.cia`s carry the
+flat committed banner (no Arwing); local builds with the ISO still make the
+3D Arwing banner. The game data zip is built locally and attached to the
+release by hand. Details: [RELEASING.md](RELEASING.md).
+
+The project is prepared for
+[Universal-Updater](https://github.com/Universal-Team/Universal-Updater)
+(`dist/universal-db/`): once the entry is accepted, players install and
+update the code straight from the store — still with the game data produced
+from their own disc. A browser converter for the game data (like the Simpsons
+Hit & Run 3DS builder) is planned but not built yet, see
+`3DS/WEB_CONVERTER_PLAN.md`.
+
 For a profiling build, add `PROFILE=1` (for example `./build.sh PROFILE=1`).
 It writes a per-zone timing breakdown of the graphics code and selected game
 functions to `sdmc:/3ds/star3d/Star3D.log`. The timers slow the game down, so use a normal
@@ -419,11 +436,13 @@ automatically on the first start.
 
 ## Making a release
 
-Releases are built with Docker: `./build.sh` produces the three release files
-— `out/star3d.3dsx`, `out/star3d.cia` and `out/star3d-gamedata.zip` (plus
-`out/star3d.elf` for crash symbols) — which are uploaded to GitHub releases
-as-is. The full workflow, including when to bump `DATA_VERSION` and how
-players update, is in [RELEASING.md](RELEASING.md).
+Pushing a `v*` tag makes GitHub Actions build `out/star3d.3dsx`,
+`out/star3d.cia` and `out/star3d.elf` and create the GitHub release; the game
+data zip (built locally with Docker: `./build.sh gamedata`) is attached to it
+by hand. Fully local releases still work (`./build.sh`), e.g. to include the
+Arwing banner and the `full` variants. The whole workflow — tagging, when to
+bump `DATA_VERSION`, what players do — is in
+[RELEASING.md](RELEASING.md).
 
 ## Repository layout
 

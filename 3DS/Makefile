@@ -515,49 +515,13 @@ $(BUILD_DIR)/relocs.ok: $(BUILD_DIR)/star3d.elf tools/check_relocs.py
 	@$(PYTHON) -I tools/check_relocs.py $< > $(BUILD_DIR)/relocs.txt || (cat $(BUILD_DIR)/relocs.txt; exit 1)
 	@touch $@
 
-# Homebrew Launcher title/icon (the icon comes from the disc's own banner)
-$(BUILD_DIR)/icon.png: $(ROMFS_STAMP) tools/make_icon.py
-	@mkdir -p $(dir $@)
-	@$(PYTHON) -I tools/make_icon.py $(ROMFS_DIR)/files/opening.bnr $@
-
-# The texts live in this rule, so it depends on the Makefile too: otherwise a
-# changed description never reaches an existing build directory. Without a
-# disc image there is no icon to build, so the rule is a no-op and the .3dsx
-# simply gets no title/icon (code-only test builds).
-SMDH_TITLE := Star 3D
-SMDH_DESCRIPTION := Star 3D a Foxhollow port made by Ezequiel
-SMDH_PUBLISHER := Ezequiel
-$(BUILD_DIR)/star3d.smdh: $(if $(ISO),$(BUILD_DIR)/icon.png,) Makefile
-	@mkdir -p $(dir $@)
-	@if [ -z "$(ISO)" ]; then \
-		echo "note: no disc image, $(notdir $@) skipped (the .3dsx gets no title/icon)"; \
-	else \
-		$(SMDHTOOL) --create "$(SMDH_TITLE)" "$(SMDH_DESCRIPTION)" "$(SMDH_PUBLISHER)" $(BUILD_DIR)/icon.png $@; \
-	fi
-
-# Code-only image (the default): the game data comes from the SD card
-# (sdmc:/3ds/star3d/gamedata/romfs.bin, main.c).
-$(BUILD_DIR)/star3d.3dsx: $(BUILD_DIR)/star3d.elf $(BUILD_DIR)/relocs.ok $(BUILD_DIR)/star3d.smdh
-	@echo "3DSX $@ (code only)"
-	@$(3DSXTOOL) $< $@ $(if $(wildcard $(BUILD_DIR)/star3d.smdh),--smdh=$(BUILD_DIR)/star3d.smdh,)
-
-# Embedded image (make full): the whole data inside the file, no SD gamedata
-# needed. This is the old behaviour, at the old several-hundred-MB size.
-$(BUILD_DIR)/star3d-full.3dsx: $(BUILD_DIR)/star3d.elf $(BUILD_DIR)/relocs.ok $(BUILD_DIR)/star3d.smdh $(ROMFS_STAMP)
-	@echo "3DSX $@ (with game data)"
-	@$(3DSXTOOL) $< $@ --smdh=$(BUILD_DIR)/star3d.smdh --romfs=$(ROMFS_DIR)
-
-# HOME Menu banner of the .cia (the .3dsx has none): the game's Arwing rendered
-# from the disc by tools/make_banner.py, plus a short synthesised chime, packed
-# by bannertool (in the Docker image). The model comes from the disc, not the
-# RomFS, whose models are polygon-reduced; it still waits for the RomFS so a
-# missing ISO gets the extractor's error message.
+# Homebrew Launcher title/icon. With the disc image it is decoded from the
+# game's own banner; without one (CI builds) the committed tools/ci/icon.png
+# is used, so code-only builds always have an icon.
 #
-# BANNER_3D=1 (the default, the user's choice) makes the banner a real 3D
-# scene: tools/banner_cgfx.py writes a CGFX with the Arwing mesh in front of
-# the starfield (banner.cgfx, plus a software preview banner_preview.png) and
-# bannertool packs that file as is. BANNER_3D=0 (docker run -e BANNER_3D=0)
-# gives the flat picture instead, if the 3D one misbehaves on a HOME Menu.
+# The banner/icon source (disc vs committed) is kept in a stamp file: the
+# rules depend on it, so switching sources refreshes the whole icon -> smdh ->
+# image chain (the stamp is written at parse time, like BANNER_MODE).
 BANNERTOOL  ?= $(shell command -v bannertool 2>/dev/null)
 BANNER_FONT ?= $(DEVKITPRO)/examples/3ds/graphics/printing/custom-font/gfx/liberationitalic.ttf
 BANNER_3D   ?= 1
@@ -567,15 +531,73 @@ BANNER_MODE := $(BUILD_DIR)/banner.mode
 ifneq ($(BANNER_3D),$(shell cat $(BANNER_MODE) 2>/dev/null))
 $(shell mkdir -p $(BUILD_DIR) && echo $(BANNER_3D) > $(BANNER_MODE))
 endif
+# Rebuild the banner/icon when their source changes (disc image vs the
+# committed CI assets)
+BANNER_SRC := $(if $(ISO),iso,ci)
+BANNER_SRC_FILE := $(BUILD_DIR)/banner.src
+ifneq ($(BANNER_SRC),$(shell cat $(BANNER_SRC_FILE) 2>/dev/null))
+$(shell mkdir -p $(BUILD_DIR) && echo $(BANNER_SRC) > $(BANNER_SRC_FILE))
+endif
 
-$(BUILD_DIR)/banner.png: $(ROMFS_STAMP) $(BANNER_SCRIPTS) $(BANNER_MODE)
+$(BUILD_DIR)/icon.png: $(if $(ISO),$(ROMFS_STAMP) tools/make_icon.py,) tools/ci/icon.png $(BANNER_SRC_FILE)
 	@mkdir -p $(dir $@)
-	@$(PYTHON) -I tools/make_banner.py "$(ISO)" $@ $(BUILD_DIR)/banner.wav $(wildcard $(BANNER_FONT)) \
-		$(if $(filter 1,$(BANNER_3D)),--cgfx $(BUILD_DIR)/banner.cgfx)
+	@if [ -n "$(ISO)" ]; then \
+		$(PYTHON) -I tools/make_icon.py $(ROMFS_DIR)/files/opening.bnr $@; \
+	else \
+		echo "note: no disc image, using the committed icon"; \
+		cp tools/ci/icon.png $@; \
+	fi
+
+# The texts live in this rule, so it depends on the Makefile too: otherwise a
+# changed description never reaches an existing build directory. It also
+# depends on the banner source stamp, so switching between disc and committed
+# assets refreshes the icon -> smdh -> image chain reliably.
+SMDH_TITLE := Star 3D
+SMDH_DESCRIPTION := Star 3D a Foxhollow port made by Ezequiel
+SMDH_PUBLISHER := Ezequiel
+$(BUILD_DIR)/star3d.smdh: $(BUILD_DIR)/icon.png Makefile $(BANNER_SRC_FILE)
+	@mkdir -p $(dir $@)
+	@$(SMDHTOOL) --create "$(SMDH_TITLE)" "$(SMDH_DESCRIPTION)" "$(SMDH_PUBLISHER)" $(BUILD_DIR)/icon.png $@
+
+# Code-only image (the default): the game data comes from the SD card
+# (sdmc:/3ds/star3d/gamedata/romfs.bin, main.c).
+$(BUILD_DIR)/star3d.3dsx: $(BUILD_DIR)/star3d.elf $(BUILD_DIR)/relocs.ok $(BUILD_DIR)/star3d.smdh
+	@echo "3DSX $@ (code only)"
+	@$(3DSXTOOL) $< $@ --smdh=$(BUILD_DIR)/star3d.smdh
+
+# Embedded image (make full): the whole data inside the file, no SD gamedata
+# needed. This is the old behaviour, at the old several-hundred-MB size.
+$(BUILD_DIR)/star3d-full.3dsx: $(BUILD_DIR)/star3d.elf $(BUILD_DIR)/relocs.ok $(BUILD_DIR)/star3d.smdh $(ROMFS_STAMP)
+	@echo "3DSX $@ (with game data)"
+	@$(3DSXTOOL) $< $@ --smdh=$(BUILD_DIR)/star3d.smdh --romfs=$(ROMFS_DIR)
+
+# HOME Menu banner of the .cia (the .3dsx has none). With the disc image: the
+# game's Arwing rendered from it by tools/make_banner.py (the model comes from
+# the disc, not the RomFS, whose models are polygon-reduced), plus a short
+# synthesised chime, packed by bannertool (in the Docker image). Without a
+# disc image (CI builds): the committed disc-free banner (starfield + title,
+# tools/ci/, made by tools/make_ci_assets.py), flat only.
+#
+# BANNER_3D=1 (the default, the user's choice) makes the banner a real 3D
+# scene: tools/banner_cgfx.py writes a CGFX with the Arwing mesh in front of
+# the starfield (banner.cgfx, plus a software preview banner_preview.png) and
+# bannertool packs that file as is. BANNER_3D=0 (docker run -e BANNER_3D=0)
+# gives the flat picture instead, if the 3D one misbehaves on a HOME Menu.
+
+$(BUILD_DIR)/banner.png: $(if $(ISO),$(ROMFS_STAMP) $(BANNER_SCRIPTS) $(BANNER_MODE),) tools/ci/banner.png tools/ci/banner.wav $(BANNER_SRC_FILE)
+	@mkdir -p $(dir $@)
+	@if [ -n "$(ISO)" ]; then \
+		$(PYTHON) -I tools/make_banner.py "$(ISO)" $@ $(BUILD_DIR)/banner.wav $(wildcard $(BANNER_FONT)) \
+			$(if $(filter 1,$(BANNER_3D)),--cgfx $(BUILD_DIR)/banner.cgfx); \
+	else \
+		echo "note: no disc image, using the committed banner (no Arwing, flat)"; \
+		cp tools/ci/banner.png $@; \
+		cp tools/ci/banner.wav $(BUILD_DIR)/banner.wav; \
+	fi
 
 $(BUILD_DIR)/banner.bnr: $(BUILD_DIR)/banner.png
 	@if [ -z "$(BANNERTOOL)" ]; then echo "error: bannertool not found (build with Docker: build.bat / build.sh)" >&2; exit 1; fi
-	@$(BANNERTOOL) makebanner $(if $(filter 1,$(BANNER_3D)),-ci $(BUILD_DIR)/banner.cgfx,-i $<) \
+	@$(BANNERTOOL) makebanner $(if $(and $(ISO),$(filter 1,$(BANNER_3D))),-ci $(BUILD_DIR)/banner.cgfx,-i $<) \
 		-a $(BUILD_DIR)/banner.wav -o $@
 
 # Installable title, code only: no RomFS (star3d.rsf has no RomFs section),

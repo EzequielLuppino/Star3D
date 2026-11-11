@@ -1,0 +1,14 @@
+{
+	"github": "EzequielLuppino/Star3D",
+	"systems": [
+		"3DS"
+	],
+	"categories": [
+		"game"
+	],
+	"unique_ids": [
+		1007520
+	],
+	"image": "https://raw.githubusercontent.com/EzequielLuppino/Star3D/main/dist/universal-db/banner.png",
+	"icon": "https://raw.githubusercontent.com/EzequielLuppino/Star3D/main/dist/universal-db/icon.png"
+}

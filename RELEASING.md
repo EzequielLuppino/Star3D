@@ -55,6 +55,38 @@ embedded RomFS (`main.c`). The log's first lines say which source it used:
 GitHub releases accept files up to 2 GiB, so the ~730 MB zip uploads fine.
 Upload the four (or six, with the `full` variants) files as release assets.
 
+## Automatic builds (GitHub Actions)
+
+`.github/workflows/build.yml` builds on every push to `main` (artifacts only)
+and creates a GitHub release with `star3d.3dsx`, `star3d.cia` and
+`star3d.elf` whenever a `v*` tag is pushed. CI has **no disc image**, so:
+
+- the banner and icon fall back to the committed disc-free assets
+  (`3DS/tools/ci/`, made by `3DS/tools/make_ci_assets.py`) — the `.cia`
+  banner is the flat starfield, no Arwing;
+- the game data zip is **not** built by CI. Release steps for a tagged build:
+
+1. `git tag v1.x && git push origin v1.x` — CI builds and creates the release.
+2. Build the data locally: `./build.sh gamedata` (needs the ISO).
+3. Upload `out/star3d-gamedata.zip` to the release CI created.
+4. Fill in the release notes (CI generates them from the commits; edit to add
+   the changelog and the gamedata status line).
+
+If you prefer fully local releases (e.g. to include the Arwing banner and the
+`full` variants), `./build.sh` / `./build.sh full` still do everything, and
+you create the release by hand.
+
+## Universal-Updater
+
+The store entry is prepared in `dist/universal-db/` (the JSON, icon and
+banner plus submission instructions). Once the PR into
+[Universal-Team/db](https://github.com/Universal-Team/db) is merged, players
+can install and update the code images straight from Universal-Updater —
+GitHub releases are the download source, so tagged CI builds are exactly what
+the store serves. The game data still has to be produced from the player's
+own disc (local build today, the planned web converter later,
+`3DS/WEB_CONVERTER_PLAN.md`).
+
 ## When the game data changes
 
 `DATA_VERSION` in `3DS/Makefile` (default 1) is the version of the game data.
