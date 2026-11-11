@@ -3,6 +3,8 @@ rem Build Star 3D (New 3DS port) with Docker.
 rem Put your own GameCube disc image (.iso, PAL GSAP01) next to this file.
 rem With no arguments, a menu of the usual build options is shown. Arguments
 rem are passed to make instead (for example: build.bat help, build.bat clean).
+rem Only "Game data" and "Everything" need the .iso: the .cia uses the disc's
+rem Arwing banner when an .iso is present, the flat committed banner otherwise.
 setlocal
 cd /d "%~dp0"
 
@@ -13,11 +15,12 @@ if not "%1"=="" goto :passthrough
 echo.
 echo Star 3D build menu
 echo ==================
-echo   1^) Game data    Convert the disc into out\star3d-gamedata.zip
+echo   1^) Game data    Convert the disc into out\star3d-gamedata.zip ^(needs the .iso^)
 echo                   ^(players extract this once per SD card^)
 echo   2^) .3dsx        Code-only build for the Homebrew Launcher
-echo   3^) .cia         Code-only build, install with FBI
-echo   4^) Everything   The whole release set: game data + .3dsx + .cia
+echo   3^) .cia         Code-only build, install with FBI. With an .iso present the
+echo                   banner gets the Arwing; without one the flat banner is used.
+echo   4^) Everything   The whole release set: game data + .3dsx + .cia ^(needs the .iso^)
 echo   5^) Clean        Remove the build outputs
 echo   0^) Exit
 echo.
@@ -41,9 +44,11 @@ goto :end
 :error
 echo.
 echo Build failed. Is Docker Desktop installed and running?
+pause
 exit /b 1
 
 :end
 echo.
 echo Done. The results are in the out\ folder (README.md: Installing).
+pause
 exit /b 0

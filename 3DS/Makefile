@@ -325,7 +325,7 @@ help:
 	@echo "Star 3D build targets (build.bat TARGET / ./build.sh TARGET / make TARGET):"
 	@echo "  all (default)  code-only .3dsx + .cia + out/star3d-gamedata.zip (needs the ISO)"
 	@echo "  code, 3dsx     the code-only .3dsx (no ISO needed)"
-	@echo "  cia            the code-only .cia (needs the ISO: the banner comes from it)"
+	@echo "  cia            the code-only .cia (the Arwing banner comes from the .iso when present)"
 	@echo "  gamedata       out/star3d-gamedata.zip, the data for the SD card (needs the ISO)"
 	@echo "  sd-romfs       out/star3d-romfs.bin, the unpacked data file"
 	@echo "  romfs          only extract/convert the data (no code images)"

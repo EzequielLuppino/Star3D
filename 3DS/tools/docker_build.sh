@@ -18,9 +18,12 @@ shopt -s nullglob nocaseglob
 isos=("$WORKSPACE"/*.iso)
 shopt -u nullglob nocaseglob
 
+# Only the game data targets need the disc image. The .cia builds without
+# one too: the Arwing banner is made from the .iso when present, otherwise
+# the Makefile silently uses the committed flat banner (tools/ci/).
 needs_iso=true
 case "${1:-}" in
-    clean|code|3dsx|help) needs_iso=false ;;
+    clean|code|3dsx|cia|help) needs_iso=false ;;
 esac
 
 if $needs_iso; then

@@ -79,8 +79,9 @@ plain ISO, for example with Dolphin (right-click the game > Convert File > ISO).
 ### Linux (and macOS)
 
 - **Docker (recommended):** install Docker Engine (or Docker Desktop), then
-  run `./build.sh`. It shows a menu: game data, `.3dsx`, `.cia`, everything,
-  clean (`./build.sh help` lists every make target).
+  run `./build.sh` (double-click it in the file manager, or run it from a
+  terminal). It shows a menu: game data, `.3dsx`, `.cia`, everything, clean
+  (`./build.sh help` lists every make target).
 - **Native devkitPro:** install devkitPro pacman, then:
 
   ```sh
@@ -106,7 +107,7 @@ when run without arguments, and pass any argument through to make (e.g.
 | --- | --- |
 | `all` (default) | the release set: code-only `out/star3d.3dsx` + `out/star3d.cia` + `out/star3d-gamedata.zip` (needs the ISO) |
 | `code`, `3dsx` | the code-only `.3dsx` (no ISO needed) |
-| `cia` | the code-only `.cia` (needs the ISO: the HOME Menu banner comes from it) |
+| `cia` | the code-only `.cia` (with the ISO it gets the Arwing banner; without it the flat committed banner) |
 | `gamedata` | `out/star3d-gamedata.zip`, the game data for the SD card |
 | `sd-romfs` | `out/star3d-romfs.bin`, the unpacked data file |
 | `romfs` | only extract and convert the game data, no code images |
