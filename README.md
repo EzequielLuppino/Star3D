@@ -61,8 +61,9 @@ plain ISO, for example with Dolphin (right-click the game > Convert File > ISO).
 
 - **Docker (recommended):** install
   [Docker Desktop](https://www.docker.com/products/docker-desktop/), then
-  run `build.bat` (double-click it, or run it from a terminal). Nothing else
-  is needed.
+  run `build.bat` (double-click it, or run it from a terminal). It shows a
+  menu: game data, `.3dsx`, `.cia`, everything, clean. Nothing else is
+  needed.
 - **Native devkitPro:** install [devkitPro](https://devkitpro.org/wiki/Getting_Started)
   to `C:\devkitPro` with the 3DS packages (`3ds-dev`, `3ds-zlib`). Also install
   Python 3 with Pillow (`pip install pillow`). Then, from the devkitPro
@@ -78,7 +79,8 @@ plain ISO, for example with Dolphin (right-click the game > Convert File > ISO).
 ### Linux (and macOS)
 
 - **Docker (recommended):** install Docker Engine (or Docker Desktop), then
-  run `./build.sh`.
+  run `./build.sh`. It shows a menu: game data, `.3dsx`, `.cia`, everything,
+  clean (`./build.sh help` lists every make target).
 - **Native devkitPro:** install devkitPro pacman, then:
 
   ```sh
@@ -96,8 +98,9 @@ pinned by digest, so builds are reproducible.
 
 ### Targets and options
 
-`make TARGET` natively, or `build.bat TARGET` / `./build.sh TARGET` with
-Docker (`make help` lists everything):
+`make TARGET` natively. With Docker, `build.bat` / `./build.sh` show a menu
+when run without arguments, and pass any argument through to make (e.g.
+`./build.sh help` lists everything):
 
 | Target | Output |
 | --- | --- |
@@ -106,8 +109,6 @@ Docker (`make help` lists everything):
 | `cia` | the code-only `.cia` (needs the ISO: the HOME Menu banner comes from it) |
 | `gamedata` | `out/star3d-gamedata.zip`, the game data for the SD card |
 | `sd-romfs` | `out/star3d-romfs.bin`, the unpacked data file |
-| `full` | `star3d-full.3dsx` + `star3d-full.cia`, the data embedded (single-file installs, the old behaviour) |
-| `full-3dsx`, `full-cia` | one embedded variant |
 | `romfs` | only extract and convert the game data, no code images |
 | `mesh-check` | compare the reduced models against the disc |
 | `clean` | remove build outputs |
@@ -194,10 +195,9 @@ against the disc (only display lists changed, every asset still present).
 - Native: `3DS/build/us_3ds/star3d.3dsx` (and `.cia` / `.elf`); the data zip
   lands in `out/` as well.
 
-The `.3dsx` and `.cia` no longer contain the game data: the data is unpacked
-from `star3d-gamedata.zip` to the SD card once (see
-[Installing](#installing)). `make full` still builds the old-style images
-with everything embedded (`star3d-full.3dsx` / `star3d-full.cia`).
+The `.3dsx` and `.cia` contain only the code: the data is unpacked from
+`star3d-gamedata.zip` to the SD card once (see
+[Installing](#installing)).
 
 For quick test builds, skip the `.cia` and the data zip (packing takes a
 while): `NO_CIA=1 NO_GAMEDATA=1` on the make command line natively, or
@@ -450,8 +450,8 @@ Pushing a `v*` tag makes GitHub Actions build `out/star3d.3dsx`,
 `out/star3d.cia` and `out/star3d.elf` and create the GitHub release; the game
 data zip (built locally with Docker: `./build.sh gamedata`) is attached to it
 by hand. Fully local releases still work (`./build.sh`), e.g. to include the
-Arwing banner and the `full` variants. The whole workflow — tagging, when to
-bump `DATA_VERSION`, what players do — is in
+Arwing banner in the `.cia`. The whole workflow — tagging, when to bump
+`DATA_VERSION`, what players do — is in
 [RELEASING.md](RELEASING.md).
 
 ## Repository layout

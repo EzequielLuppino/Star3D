@@ -275,7 +275,7 @@ CONVERT_OPTIONS_TEXT := TEX_QUALITY=$(TEX_QUALITY) TEX_MIPMAPS=$(TEX_MIPMAPS) TE
 # CIA title (GRAPHICS_PLAN.md 1.3)
 APP_UNIQUE_ID := 0xF5FA0
 
-.PHONY: all clean test code 3dsx cia gamedata sd-romfs full full-3dsx full-cia romfs mesh-check help FORCE
+.PHONY: all clean test code 3dsx cia gamedata sd-romfs romfs mesh-check help FORCE
 
 ### Targets ###
 # The game data is decoupled from the code images (RELEASING.md): "all" builds
@@ -314,12 +314,6 @@ sd-romfs: $(BUILD_ROOT)/sd/star3d-romfs.bin
 	@cp $< ../out/star3d-romfs.bin
 	@ls -la ../out/star3d-romfs.bin
 
-# Data embedded in the images (single-file installs, no gamedata folder
-# needed): the old behaviour. These are the several-hundred-MB files.
-full: $(BUILD_DIR)/star3d-full.3dsx $(if $(BUILD_CIA),$(BUILD_DIR)/star3d-full.cia)
-full-3dsx: $(BUILD_DIR)/star3d-full.3dsx
-full-cia: $(BUILD_DIR)/star3d-full.cia
-
 # Only extract and convert the game data (no code images)
 romfs: $(ROMFS_STAMP)
 
@@ -334,9 +328,6 @@ help:
 	@echo "  cia            the code-only .cia (needs the ISO: the banner comes from it)"
 	@echo "  gamedata       out/star3d-gamedata.zip, the data for the SD card (needs the ISO)"
 	@echo "  sd-romfs       out/star3d-romfs.bin, the unpacked data file"
-	@echo "  full           .3dsx and .cia with the data embedded (single-file installs)"
-	@echo "  full-3dsx      the embedded .3dsx alone"
-	@echo "  full-cia       the embedded .cia alone"
 	@echo "  romfs          only extract/convert the data (no code images)"
 	@echo "  mesh-check     compare the reduced models against the disc"
 	@echo "  clean          remove all build outputs"
@@ -565,12 +556,6 @@ $(BUILD_DIR)/star3d.3dsx: $(BUILD_DIR)/star3d.elf $(BUILD_DIR)/relocs.ok $(BUILD
 	@echo "3DSX $@ (code only)"
 	@$(3DSXTOOL) $< $@ --smdh=$(BUILD_DIR)/star3d.smdh
 
-# Embedded image (make full): the whole data inside the file, no SD gamedata
-# needed. This is the old behaviour, at the old several-hundred-MB size.
-$(BUILD_DIR)/star3d-full.3dsx: $(BUILD_DIR)/star3d.elf $(BUILD_DIR)/relocs.ok $(BUILD_DIR)/star3d.smdh $(ROMFS_STAMP)
-	@echo "3DSX $@ (with game data)"
-	@$(3DSXTOOL) $< $@ --smdh=$(BUILD_DIR)/star3d.smdh --romfs=$(ROMFS_DIR)
-
 # HOME Menu banner of the .cia (the .3dsx has none). With the disc image: the
 # game's Arwing rendered from it by tools/make_banner.py (the model comes from
 # the disc, not the RomFS, whose models are polygon-reduced), plus a short
@@ -610,16 +595,6 @@ $(BUILD_DIR)/star3d.cia: $(BUILD_DIR)/star3d.elf $(BUILD_DIR)/relocs.ok $(BUILD_
 	@$(MAKEROM) -f cia -o $@ -target t -elf $(BUILD_DIR)/star3d.elf -rsf tools/cia/star3d.rsf \
 		-icon $(BUILD_DIR)/star3d.smdh -banner $(BUILD_DIR)/banner.bnr \
 		-DAPP_UNIQUE_ID=$(APP_UNIQUE_ID)
-
-# Installable title with the data embedded (make full), same New 3DS
-# memory/clock settings.
-$(BUILD_DIR)/star3d-full.cia: $(BUILD_DIR)/star3d.elf $(BUILD_DIR)/relocs.ok $(BUILD_DIR)/star3d.smdh $(BUILD_DIR)/banner.bnr \
-                              $(ROMFS_STAMP) tools/cia/star3d-full.rsf
-	@if [ -z "$(MAKEROM)" ]; then echo "error: makerom not found (build with Docker: build.bat / build.sh)" >&2; exit 1; fi
-	@echo "CIA $@ (with game data)"
-	@$(MAKEROM) -f cia -o $@ -target t -elf $(BUILD_DIR)/star3d.elf -rsf tools/cia/star3d-full.rsf \
-		-icon $(BUILD_DIR)/star3d.smdh -banner $(BUILD_DIR)/banner.bnr \
-		-DAPP_ROMFS=$(ROMFS_DIR) -DAPP_UNIQUE_ID=$(APP_UNIQUE_ID)
 
 ### Clean target ###
 clean:

@@ -44,16 +44,13 @@ embedded RomFS (`main.c`). The log's first lines say which source it used:
    - `out/star3d-gamedata.zip`
    - `out/star3d.elf`
 
-3. Optionally build and test the embedded variants (`./build.sh full`) if you
-   want to also offer single-file installs (`out/star3d-full.3dsx`,
-   `out/star3d-full.cia`). They are the old behaviour, several hundred MB.
-4. Test before uploading: install `out/star3d.cia` on a console whose SD has
+3. Test before uploading: install `out/star3d.cia` on a console whose SD has
    *only* the gamedata zip extracted (no build artifacts), and check the log
    line `game data: sdmc:/3ds/star3d/gamedata/romfs.bin`. Also boot the
    `star3d.3dsx` from the Homebrew Launcher the same way.
 
 GitHub releases accept files up to 2 GiB, so the ~730 MB zip uploads fine.
-Upload the four (or six, with the `full` variants) files as release assets.
+Upload the four files as release assets.
 
 ## Automatic builds (GitHub Actions)
 
@@ -72,9 +69,8 @@ and creates a GitHub release with `star3d.3dsx`, `star3d.cia` and
 4. Fill in the release notes (CI generates them from the commits; edit to add
    the changelog and the gamedata status line).
 
-If you prefer fully local releases (e.g. to include the Arwing banner and the
-`full` variants), `./build.sh` / `./build.sh full` still do everything, and
-you create the release by hand.
+If you prefer fully local releases (e.g. to include the Arwing banner in the
+`.cia`), `./build.sh` builds everything and you create the release by hand.
 
 ## Universal-Updater
 
@@ -121,10 +117,9 @@ At boot the game compares the two numbers and logs:
 | `./build.sh` (`all`) | the release set: code-only `.3dsx` + `.cia` + gamedata zip |
 | `./build.sh cia` | only the code-only `.cia` |
 | `./build.sh gamedata` | only `out/star3d-gamedata.zip` |
-| `./build.sh full` | `star3d-full.3dsx` + `star3d-full.cia` (data embedded) |
 | `./build.sh code` | only the code-only `.3dsx` (no ISO needed) |
 
-`NO_CIA=1` and `NO_GAMEDATA=1` skip parts of `all`/`full` for quick iteration
+`NO_CIA=1` and `NO_GAMEDATA=1` skip parts of `all` for quick iteration
 builds (`docker run -e NO_CIA=1 ...`).
 
 ## Suggested release workflow
@@ -141,10 +136,10 @@ builds (`docker run -e NO_CIA=1 ...`).
 ## Troubleshooting
 
 - **"no game data (0x…): this build embeds none and the SD card has none"**
-  in the log: the player has neither the gamedata folder nor a `full` build.
-  They must extract `star3d-gamedata.zip` to the SD root.
+  in the log: the player has no `gamedata` folder on the SD card. They must
+  extract `star3d-gamedata.zip` to the SD root.
 - **`hbmenu` launches an old build:** a `.3dsx` inside `/3ds/star3d/` makes
   hbmenu show the folder as an entry. Keep exactly one `star3d.3dsx` at
   `/3ds/` root (README, "Testing on a console over the network").
 - **Changing `DATA_VERSION` re-extracts the data** (the extraction stamp
-  records it) and recompiles the port objects — expect a full build.
+  records it) and recompiles the port objects — expect a full rebuild.

@@ -1,7 +1,8 @@
 #!/bin/bash
 # Entry point of the Docker build image (see Dockerfile in the repository root).
 # Builds the 3DS port from /workspace. Arguments are passed to make, e.g.
-# "clean", "code", "cia", "gamedata", "full" ("help" lists them all).
+# "clean", "code", "3dsx", "cia", "gamedata", "all" ("help" lists them all);
+# build.sh / build.bat pick one of these from their menu.
 #
 # By default (no arguments) this builds the release set: the code-only
 # out/star3d.3dsx and out/star3d.cia plus out/star3d-gamedata.zip (the game
@@ -68,9 +69,7 @@ if { [ $# -eq 0 ] || [ "$1" = "all" ]; }; then
     fi
 fi
 
-# Embedded (full) builds and the unpacked data file land in out/ too
-collect build-docker/us_3ds/star3d-full.3dsx star3d-full.3dsx
-collect build-docker/us_3ds/star3d-full.cia star3d-full.cia
+# The unpacked data file lands in out/ too
 collect build-docker/sd/star3d-romfs.bin star3d-romfs.bin
 
 echo
@@ -81,6 +80,5 @@ echo "  out/star3d-gamedata.zip  extract once to the SD card's root"
 echo "                           -> sdmc:/3ds/star3d/gamedata/romfs.bin"
 echo "Updates: install the new .cia over the old one; the gamedata folder"
 echo "stays (see RELEASING.md)."
-echo "Full single-file builds: ./build.sh full -> star3d-full.3dsx / star3d-full.cia"
 echo "Log: sdmc:/3ds/star3d/Star3D.log"
 echo "(out/star3d.elf has the symbols for the crash addresses in the log.)"

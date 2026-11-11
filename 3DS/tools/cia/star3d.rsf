@@ -4,9 +4,6 @@
 # star3d-gamedata.zip). Values in $(...) are passed by the Makefile
 # (-DAPP_UNIQUE_ID=...).
 #
-# star3d-full.rsf (the variant with the data embedded) must stay in sync with
-# this file apart from its RomFs section.
-#
 # Compared with the .3dsx (which runs inside whatever memory mode the
 # Homebrew Launcher's host title got), the CIA asks for the New 3DS extended
 # memory mode (178 MB), the 804 MHz clock and the L2 cache itself.
