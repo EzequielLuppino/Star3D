@@ -1,5 +1,6 @@
 {
 	"github": "EzequielLuppino/Star3D",
+	"title": "Star 3D",
 	"systems": [
 		"3DS"
 	],
@@ -9,6 +10,9 @@
 	"unique_ids": [
 		1007520
 	],
+	"llm_generation": "yes",
 	"image": "https://raw.githubusercontent.com/EzequielLuppino/Star3D/main/dist/universal-db/banner.png",
-	"icon": "https://raw.githubusercontent.com/EzequielLuppino/Star3D/main/dist/universal-db/icon.png"
+	"icon": "https://raw.githubusercontent.com/EzequielLuppino/Star3D/main/dist/universal-db/icon.png",
+	"preinstall_message": "This app contains no game data. You need your own legally dumped disc image of the game (PAL, game ID GSAP01, revision 1): it is converted into a data file that the game loads from sdmc:/3ds/star3d/gamedata/romfs.bin. See the project README for how.",
+	"long_description": "# Star 3D\n\nAn unofficial port of a 2002 GameCube adventure game to the New Nintendo 3DS / New 2DS XL, built on the foxhollow native PC port and the SFA-Decomp decompilation. The game code is compiled as-is for the 3DS; a 3DS platform layer, the Stellaris engine, replaces the PC graphics, audio, input, disc and save code.\n\n- GameCube GX graphics rebuilt on the PICA200 GPU (citro3d): TEV combiners, fog, lighting, EFB copies, depth of field, fur and grass, water and heat warps\n- Stereo 3D that follows the 3D slider, with auto-convergence\n- 16:9 widescreen and a minimap HUD on the bottom screen\n- The game's music and sound effects on the 3DS DSP\n- C-stick camera, gyro aiming, item menu on the touch screen\n- Saves on the SD card, with GameCube memory-card semantics\n\n**No game data is included.** You need your own legally dumped disc image of the game (PAL release, game ID GSAP01, revision 1). Its files are extracted and converted into a game data file that the game loads from the SD card (sdmc:/3ds/star3d/gamedata/romfs.bin), so the installable .cia and the .3dsx stay small: the data is put on the SD card once, and later releases are small images installed over the old ones. See the project README for instructions.\n\nRequires a New 3DS / New 2DS XL."
 }
