@@ -32,6 +32,34 @@ void* Obj_GetPlayerObject(void);
 #define CAM_DEBUG 0x46       // DLL 70: C-stick orbits
 #define CAM_WORLD_MAP 0x4E   // DLL 78: C-stick turns the globe
 
+// --- Stick dead zone -----------------------------------------------------------
+
+// S3D_DEADZONE_PCT (Settings > Stick dead zone): the dead zone of BOTH sticks
+// at once, in percent of the throw (0 = none, 100 = the whole throw). Applied
+// where the port reads them - the circle pad in pad_3ds.c, the physical
+// C-stick here - so the game, the camera orbit and the aim share the one
+// value. Remote commands and the touch menu keep their exact values.
+
+float port_stick_deadzone(void) {
+    static int pct = 15;
+    CFG_LIVE(pct, cfg_int("S3D_DEADZONE_PCT", 15));
+    if (pct <= 0) return 0.0f;
+    if (pct >= 100) return 1.0f;
+    return pct / 100.0f;
+}
+
+// Applies the dead zone to one stick axis, -127..127
+s8 port_stick_deadzone_apply(s8 v) {
+    float dz = port_stick_deadzone();
+    if (dz <= 0.0f) return v;
+    if (dz >= 1.0f) return 0;
+    float f = v / 127.0f;
+    if (f > dz) f = (f - dz) / (1.0f - dz);
+    else if (f < -dz) f = (f + dz) / (1.0f - dz);
+    else f = 0.0f;
+    return (s8)(f * 127.0f);
+}
+
 // --- C-stick -------------------------------------------------------------------
 
 static s8 scale_axis(s16 value) {
@@ -40,7 +68,10 @@ static s8 scale_axis(s16 value) {
     return (s8)((value * 127) / 156);
 }
 
-// The physical C-stick (or the remote "cstick" command), -127..127
+// The physical C-stick (or the remote "cstick" command), -127..127. The
+// stick dead zone (S3D_DEADZONE_PCT) is applied to the physical input here,
+// so the game and the camera orbit share it; remote commands keep their
+// exact values.
 void port_cstick_read(s8* x, s8* y) {
     circlePosition c;
     irrstCstickRead(&c);
@@ -49,7 +80,10 @@ void port_cstick_read(s8* x, s8* y) {
     if (remote_cstick[0] || remote_cstick[1]) {
         *x = remote_cstick[0];
         *y = remote_cstick[1];
+        return;
     }
+    *x = port_stick_deadzone_apply(*x);
+    *y = port_stick_deadzone_apply(*y);
 }
 
 // S3D_CSTICK_CAMERA (default 1): whether the physical C-stick goes to the
@@ -68,12 +102,6 @@ bool port_cstick_to_game(void) {
 
 static float s_orbit_height;  // World units added to the camera's height band
 static bool s_recenter;
-
-static float dead_zone(float v, float dz) {
-    if (v > dz) return (v - dz) / (1.0f - dz);
-    if (v < -dz) return (v + dz) / (1.0f - dz);
-    return 0.0f;
-}
 
 // Called by the normal camera's update, once per game frame: the yaw to turn
 // the camera around Fox this frame, in radians. S3D_CAM_SPEED is degrees per
@@ -94,7 +122,7 @@ float port_camera_orbit_yaw(void) {
     }
     s8 cx, cy;
     port_cstick_read(&cx, &cy);
-    float x = dead_zone(cx / 127.0f, 0.15f), y = dead_zone(cy / 127.0f, 0.15f);
+    float x = cx / 127.0f, y = cy / 127.0f;  // Dead zone applied by port_cstick_read
     if (inv_x) x = -x;
     if (inv_y) y = -y;
     float dt = timeDelta / 60.0f;  // timeDelta counts 60 Hz frames
@@ -203,7 +231,7 @@ float port_aim_axis(float v, float stick, int axis) {
     CFG_LIVE(inv_x, cfg_bool("S3D_GYRO_INVERT_X", false));
     CFG_LIVE(inv_y, cfg_bool("S3D_GYRO_INVERT_Y", false));
     // Full tilt crosses from the centre to the edge in about half a second
-    v += dead_zone(stick, 0.12f) * 2.0f * (timeDelta / 60.0f);
+    v += stick * 2.0f * (timeDelta / 60.0f);  // Dead zone applied by pad_3ds.c
     if (gyro) {
         float deg = s_gyro_deg[axis];
         s_gyro_deg[axis] = 0.0f;

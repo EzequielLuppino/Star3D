@@ -12,6 +12,8 @@
 bool port_cstick_to_game(void);
 void port_cstick_read(s8* x, s8* y);
 void touchui_pad_state(s8* cx, s8* cy, u16* buttons);
+// controls_3ds.c: the configured stick dead zone (S3D_DEADZONE_PCT)
+s8 port_stick_deadzone_apply(s8 v);
 
 // Static PADStatus structure to hold controller state
 static PADStatus g_pad_status;
@@ -143,7 +145,8 @@ void padrec_frame(void) {
     btn |= vb;
     circlePosition cp;
     hidCircleRead(&cp);
-    s8 sx = scale_axis(cp.dx), sy = scale_axis(cp.dy);
+    s8 sx = port_stick_deadzone_apply(scale_axis(cp.dx));
+    s8 sy = port_stick_deadzone_apply(scale_axis(cp.dy));
     if (remote_stick[0] || remote_stick[1]) {
         sx = remote_stick[0];
         sy = remote_stick[1];
@@ -313,14 +316,15 @@ static s8 scale_axis(s16 value) {
 }
 
 static void update_analog_sticks(void) {
-    // Circle pad -> main stick
+    // Circle pad -> main stick, with the stick dead zone (S3D_DEADZONE_PCT)
     circlePosition circle_pad;
     hidCircleRead(&circle_pad);
-    g_pad_status.stickX = scale_axis(circle_pad.dx);
-    g_pad_status.stickY = scale_axis(circle_pad.dy);
+    g_pad_status.stickX = port_stick_deadzone_apply(scale_axis(circle_pad.dx));
+    g_pad_status.stickY = port_stick_deadzone_apply(scale_axis(circle_pad.dy));
 
     // C-Stick (New 3DS) -> GameCube C-stick where the game uses it; in normal
-    // play it moves the camera instead (controls_3ds.c)
+    // play it moves the camera instead (controls_3ds.c). Its dead zone is
+    // applied inside port_cstick_read.
     g_pad_status.substickX = g_pad_status.substickY = 0;
     if (port_cstick_to_game()) port_cstick_read(&g_pad_status.substickX, &g_pad_status.substickY);
 }

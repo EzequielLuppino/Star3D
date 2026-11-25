@@ -342,7 +342,8 @@ Switches for `env.txt`: `S3D_CSTICK_CAMERA=0` (C-stick back to the original
 menu), `S3D_GYRO_AIM=0`, `S3D_GYRO_SENS=100` (percent), `S3D_GYRO_INVERT_X=1`,
 `S3D_GYRO_INVERT_Y=1`, `S3D_CAM_SPEED=150` (degrees per second),
 `S3D_CAM_INVERT_X=1`, `S3D_CAM_INVERT_Y=1`, `S3D_AIM_HOLD=0` (the game's
-spring-back aim), `S3D_CMENU_BOTTOM=0` (the ring back on the top screen).
+spring-back aim), `S3D_CMENU_BOTTOM=0` (the ring back on the top screen),
+`S3D_DEADZONE_PCT=15` (both sticks' dead zone, percent of the throw).
 Details are in `3DS/CONTROLS.md`.
 
 ## Settings menu
@@ -350,12 +351,13 @@ Details are in `3DS/CONTROLS.md`.
 The Settings tab on the touch screen lists the everyday options. The
 defaults are: 30 FPS cap off, adaptive frame pacing on, shadows High (the
 GameCube's projected shadows), fog on, fur in cutscenes, grass quality high,
-object distance Low, depth of field on, gyro aiming on, C-stick camera on and
-logging off. The 3D options are "3D: faster (fewer effects)" on (half the fur
-layers and no blur while the 3D slider is up), "3D: depth follows Fox" off
-(the screen depth stays at the set distance), "3D: strength" Strong (30),
-"3D: screen depth" Close (60) and "3D: close-up limit" Safe (foreground pops
-out as far as the background recedes).
+object distance Low, depth of field on, gyro aiming on, C-stick camera on,
+stick dead zone 15% (both sticks at once, 0% = none, 100% = the whole
+throw) and logging off. The 3D options are "3D: faster (fewer effects)" on
+(half the fur layers and no blur while the 3D slider is up), "3D: depth
+follows Fox" off (the screen depth stays at the set distance), "3D: strength"
+Strong (30), "3D: screen depth" Close (60) and "3D: close-up limit" Safe
+(foreground pops out as far as the background recedes).
 "Grass quality" (`S3D_GRASS_QUALITY`) is High (the default: the fern trees,
 grass clumps and flowers all render), Low (trees only: the grass clumps and
 flowers are hidden) or Off (no plants at all, the fruit hanging on the trees

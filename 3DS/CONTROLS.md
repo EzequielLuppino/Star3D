@@ -38,9 +38,10 @@ position around Fox each frame, after `CameraModeNormal_updateWallAvoidance`
 and before `follow`. It does this the same way the game's own wall avoidance
 rotates it. Nothing pulls the swing back, so there is no stored offset.
 
-- `port_camera_orbit_yaw()` returns this frame's turn: C-stick X with a 15%
-  dead zone, `S3D_CAM_SPEED` degrees per second at full tilt (default 150),
-  scaled by `timeDelta` (60 Hz frames). Right turns the view right.
+- `port_camera_orbit_yaw()` returns this frame's turn: C-stick X with the
+  stick dead zone (`S3D_DEADZONE_PCT`, below), `S3D_CAM_SPEED` degrees per
+  second at full tilt (default 150), scaled by `timeDelta` (60 Hz frames).
+  Right turns the view right.
 - Up/down moves `port_camera_orbit_height()`, which is added to the camera's
   height band (`lowerY`/`upperY` in `CameraModeNormal_updateSlide`). The
   camera eases into the band at its own rate. The range is -25..+45 world
@@ -177,5 +178,11 @@ per second (right/up positive) for N frames.
 
 ## Settings
 
-The Settings tab has "Gyro aiming" (`S3D_GYRO_AIM`) and "C-stick moves
-camera" (`S3D_CSTICK_CAMERA`).
+The Settings tab has "Gyro aiming" (`S3D_GYRO_AIM`), "C-stick moves
+camera" (`S3D_CSTICK_CAMERA`) and "Stick dead zone" (`S3D_DEADZONE_PCT`).
+"Stick dead zone" is the dead zone of both sticks at once, in percent of the
+throw: 0% adds nothing (the game's own dead zone stays), 100% is the whole
+throw. It is applied where the port reads them - the circle pad in
+`pad_3ds.c` and the physical C-stick in `port_cstick_read` - so the game,
+the camera orbit and the aim hold all share the one value. The touch item
+pad's pulses and the remote commands are not dead-zoned.

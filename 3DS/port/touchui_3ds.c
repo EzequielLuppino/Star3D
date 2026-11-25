@@ -104,6 +104,13 @@ static const char* const clamp_names[] = { [2] = "Safe", [3] = "Extra", [1] = "G
 // negative-near effect viewports, in thousandths of the depth range
 static const int eps_choices[] = { 0, 2, 5, 10, 20, INT32_MIN };
 static const char* const eps_names[] = { [0] = "Off", [2] = "2", [5] = "5", [10] = "10", [20] = "20" };
+// S3D_DEADZONE_PCT (Settings > Stick dead zone): the dead zone of BOTH sticks
+// at once, in percent of the throw (0 = none, 100 = the whole throw), applied
+// where the port reads them (pad_3ds.c, controls_3ds.c)
+static const int deadzone_choices[] = { 0, 5, 10, 15, 20, 30, 40, 50, 75, 100, INT32_MIN };
+static const char* const deadzone_names[] = { [0] = "0%", [5] = "5%", [10] = "10%", [15] = "15%",
+                                              [20] = "20%", [30] = "30%", [40] = "40%", [50] = "50%",
+                                              [75] = "75%", [100] = "100%" };
 
 static char s_status[48];
 static int s_status_frames;
@@ -180,6 +187,8 @@ static const Row settings_rows[] = {
     { "3D: auto cut effects", ROW_BOOL, "S3D_STEREO_AUTO", 1 },
     { "Gyro aiming", ROW_BOOL, "S3D_GYRO_AIM", 1 },
     { "C-stick moves camera", ROW_BOOL, "S3D_CSTICK_CAMERA", 1 },
+    // Both sticks at once, 0% = none, 100% = the whole throw (controls_3ds.c)
+    { "Stick dead zone", ROW_CHOICE, "S3D_DEADZONE_PCT", 15, deadzone_choices, deadzone_names },
     { "Texture blur (LOD bias)", ROW_CHOICE, "S3D_TEX_LODBIAS_X4", 0, lod_choices, lod_names, .advanced = true },
     { "Texture resolution", ROW_CHOICE, "S3D_TEX_RES", 0, tex_res_choices, tex_res_names },
     // Bug 45, hidden from the everyday menu (S3D_MENU_ADVANCED=1 lists them):
