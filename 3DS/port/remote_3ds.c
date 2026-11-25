@@ -18,6 +18,11 @@
 //   import N [SLOT] import entry N into card slot SLOT (1..3, default first free)
 //   stats           log the "diag" stats line now
 //   mark            log a "mark" snapshot (same as L+R+SELECT)
+//   winrace         win the Ice Mountain race (Cheats tab "Win Ice Mountain race")
+//   raceinfo        log the race controller state and gamebits
+//   bit N [V]       log gamebit N (hex ok), or set it to V (0/1) first
+//   seq N           run object sequence N on the player's ice mountain bike (testing)
+//   bikefirst       put the player's ice mountain bike first in the race ranking (testing)
 //   frametrace      start a frame trace (needs S3D_FRAME_TRACE, frametrace_3ds.c)
 //   tod [SECONDS]   log the time of day, or set it (0-86400, 43200 = noon), e.g. "tod 0"
 // Lines starting with # are ignored. Every command is logged.
@@ -41,6 +46,8 @@ void touchui_remote_flick(int dx, int dy);
 void port_remote_gyro(float yaw_dps, float pitch_dps, int frames);  // controls_3ds.c
 extern void* gSkyState;  // SkyState (include/main/sky_state.h), timeOfDay at 0x20C
 void* Obj_GetPlayerObject(void);
+void mainSetBits(int gameBit, int value);
+int mainGetBit(int gameBit);
 
 #define CMD_FILE "sdmc:/3ds/star3d/cmd.txt"
 #define POLL_FRAMES 240  // SD polls: first at frame 30, then every 240
@@ -191,6 +198,23 @@ static void run(const char* cmd) {
         diag_stats();
     } else if (!strcmp(cmd, "mark")) {
         diag_mark();
+    } else if (!strcmp(cmd, "winrace")) {
+        LOG_WARN("remote", "winrace: %d", savestate_cheat_winrace());
+    } else if (!strcmp(cmd, "raceinfo")) {
+        savestate_race_log();
+    } else if (!strncmp(cmd, "seq ", 4)) {
+        LOG_WARN("remote", "seq %d: %d", atoi(cmd + 4), savestate_race_runseq(atoi(cmd + 4)));
+    } else if (!strcmp(cmd, "bikefirst")) {
+        LOG_WARN("remote", "bikefirst: %d", savestate_race_bikefirst());
+    } else if (!strncmp(cmd, "bit", 3) && (cmd[3] == ' ' || cmd[3] == 0)) {
+        int bit = 0, val = 0;
+        int n = sscanf(cmd + 3, "%i %i", &bit, &val);
+        if (n >= 1) {
+            if (n >= 2) mainSetBits(bit, val);
+            LOG_WARN("remote", "bit 0x%X = %d", bit, mainGetBit(bit));
+        } else {
+            LOG_WARN("remote", "usage: bit N [V]");
+        }
     } else if (!strcmp(cmd, "frametrace")) {
         ft_request();
     } else if (!strncmp(cmd, "tod", 3)) {

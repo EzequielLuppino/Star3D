@@ -144,6 +144,7 @@ static void do_mark(void) {
     status("Snapshot written to Star3D.log");
 }
 static void do_heal(void) { status(savestate_cheat_heal() ? "Healed" : "No player"); }
+static void do_winrace(void) { status(savestate_cheat_winrace() ? "Ice Mountain race won" : "Not in the Ice Mountain race"); }
 static void open_import(void);
 
 static const Row settings_rows[] = {
@@ -223,6 +224,7 @@ static const Row cheat_rows[] = {
     { "Tiny Fox", ROW_CHEAT, .cheat = &cheat_tiny },
     { "Moon jump (hold L)", ROW_CHEAT, .cheat = &cheat_moonjump },
     { "Heal now", ROW_ACTION, .action = do_heal },
+    { "Win Ice Mountain race", ROW_ACTION, .action = do_winrace },
 };
 
 #define COUNT(a) ((int)(sizeof(a) / sizeof((a)[0])))
@@ -468,6 +470,7 @@ void touchui_frame(void) {
     if (s_test_loadstate > 0 && ++s_test_frame == s_test_loadstate) savestate_snap_request_load(0);
     savestate_cheats(cheat_health, cheat_magic, cheat_money, cheat_giant ? 2 : cheat_tiny ? -1 : 0);
     savestate_moonjump(cheat_moonjump && (s_test_moonjump || (hidKeysHeld() & KEY_L) || (remote_pad_buttons & PAD_TRIGGER_L)));
+    savestate_race_frame();
     savestate_frame();
     const char* msg = savestate_snap_message();
     if (msg) {

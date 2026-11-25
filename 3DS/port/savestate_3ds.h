@@ -27,6 +27,11 @@ const char* savestate_snap_message(void);
 void savestate_cheats(int health, int magic, int money, int scale);
 bool savestate_cheat_heal(void);
 void savestate_moonjump(bool held);          // Rises while held
+bool savestate_cheat_winrace(void);
+void savestate_race_frame(void);             // Per frame: keep the player off the bike after a cheat win
+void savestate_race_log(void);               // Race state to the log (remote "raceinfo")
+bool savestate_race_runseq(int idx);         // Run sequence idx on the player's bike
+bool savestate_race_bikefirst(void);         // Put the player's bike ahead in the route rank
 bool savestate_log_where(const char* tag);  // player position, false outside the game
 
 #endif

@@ -464,3 +464,267 @@ bool savestate_cheat_heal(void) {
     wr16(st + ST_MAGIC, rd16(st + ST_MAX_MAGIC));
     return true;
 }
+
+// --- Win Ice Mountain race cheat ---------------------------------------------
+// The ice mountain SnowBike race (SnowBikes DLL 597 vs the two SnowClaw riders,
+// DLL 604) is decided by the map controller IMIceMountain (DLL 361) from the
+// player's race rank; see icemountain_win(). race_controller() (CRCloudRace,
+// DLL 605) is only used by the "raceinfo" log.
+
+#define DLL_CRCLOUDRACE 605
+#define DLL_SNOWBIKE 597
+#define OBJ_DEF 0x50     // GameObject -> ObjDef (modelInstance)
+#define DEF_DLLID 0x50   // ObjDef -> DLL id
+#define RACEBIT_COMPLETION_EVENT 0xDCA
+#define RACEBIT_RACE_STARTED 0x49D
+#define RACEBIT_RACE_ACTIVE 0x497
+#define RACEBIT_IN_FINISH_VOLUME 0x499
+#define RACEBIT_RACE_CAN_FINISH 0x4A9
+#define RACEBIT_ABORT_TRIGGER 0x2E8
+#define RACEBIT_IM_RACE_OVER 0x3A3  // GAMEBIT_IM_BikeRelated03A3, the player bike's stop bit
+#define DLL_ICEMOUNTAIN 361
+#define IM_EVENT_STATE 0x00      // IMIceMountainState.eventState
+#define IM_STATE_RACING 4
+#define IM_STATE_WON 5           // won, waiting for the end sequence
+#define IM_STATE_AFTER_WIN 0     // after state 5: setMapAct 2
+#define RACE_DISMOUNT_TIMEOUT 120  // frames to wait for the controller
+#define BIKE_ROUTE 0x28          // SnowBikeState.routeState
+#define ROUTE_PROGRESS 0x0C      // CheckpointRouteState.routeProgress
+#define ROUTE_LINK_DEPTH 0x1C    // CheckpointRouteState.linkDepth
+#define BIKE_ROUTE_RANK 0x422    // SnowBikeState.routeRank
+
+extern void mainSetBits(int gameBit, int value);
+extern int mainGetBit(int gameBit);
+extern void** ObjList_GetObjects(int* startIndex, int* objectCount);
+extern void*** gGameUIInterface;         // GameUIInterface (dll_0000_gameui.h)
+extern void*** gObjectTriggerInterface;  // ObjectTriggerInterface (objseq.h)
+extern void* playerGetFocusObject(void* player);
+extern int playerStopRidingObject(void* player);
+
+static unsigned char* player_bike(void);
+static unsigned char* icemountain_obj(void);
+static unsigned char* s_race_guard_im;  // armed after a cheat win: the IMIceMountain object
+static int s_race_wait_frames;           // frames left for the controller to decide
+
+// Run sequence idx on the player's bike (the race-over script; testing)
+bool savestate_race_runseq(int idx) {
+    if (!in_game()) return false;
+    unsigned char* bike = player_bike();
+    if (!bike) return false;
+    ((int (*)(int, void*, int))(*(void***)gObjectTriggerInterface)[0x48 / 4])(idx, bike, -1);
+    LOG_WARN("cheat", "ran sequence %d on bike %p", idx, (void*)bike);
+    return true;
+}
+
+// Put the player's bike ahead of every other bike's route (linkDepth and
+// routeProgress) so the checkpoint ranking puts it first; also run its path
+// progress to the end (180). Testing helper for the race win condition.
+bool savestate_race_bikefirst(void) {
+    if (!in_game()) return false;
+    unsigned char* pb = player_bike();
+    if (!pb) return false;
+    int start = 0, count = 0;
+    unsigned char** objs = (unsigned char**)ObjList_GetObjects(&start, &count);
+    int maxLink = 0;
+    float maxProg = 0;
+    for (int i = 0; objs && i < count; i++) {
+        unsigned char* o = objs[i];
+        if (!o) continue;
+        unsigned char* def = *(unsigned char**)(o + OBJ_DEF);
+        if (!def || *(int16_t*)(def + DEF_DLLID) != DLL_SNOWBIKE) continue;
+        unsigned char* ex = *(unsigned char**)(o + OBJ_EXTRA);
+        if (!ex) continue;
+        int l = *(int*)(ex + 0x28 + 0x1C);
+        float p = rdf(ex + 0x28 + 0x0C);
+        if (l > maxLink || (l == maxLink && p > maxProg)) {
+            maxLink = l;
+            maxProg = p;
+        }
+    }
+    unsigned char* pex = *(unsigned char**)(pb + OBJ_EXTRA);
+    *(int*)(pex + 0x28 + 0x1C) = maxLink + 1;
+    wrf(pex + 0x28 + 0x0C, maxProg + 1000.0f);
+    wrf(pex + 0x68, 180.0f);
+    LOG_WARN("cheat", "bikefirst: linkDepth %d routeProgress %.1f (was max %d / %.1f)", maxLink + 1, maxProg + 1000.0f,
+             maxLink, maxProg);
+    return true;
+}
+
+// The race controller object, or NULL when the current map has none
+static unsigned char* race_controller(void) {
+    int start = 0, count = 0;
+    unsigned char** objs = (unsigned char**)ObjList_GetObjects(&start, &count);
+    for (int i = 0; objs && i < count; i++) {
+        unsigned char* o = objs[i];
+        if (!o) continue;
+        unsigned char* def = *(unsigned char**)(o + OBJ_DEF);
+        if (def && *(int16_t*)(def + DEF_DLLID) == DLL_CRCLOUDRACE) return o;
+    }
+    return NULL;
+}
+
+// The player's ice mountain bike (rom 0x72 = SNOWBIKE_IM_BIKE_OBJ)
+static unsigned char* player_bike(void) {
+    int start = 0, count = 0;
+    unsigned char** objs = (unsigned char**)ObjList_GetObjects(&start, &count);
+    for (int i = 0; objs && i < count; i++) {
+        unsigned char* o = objs[i];
+        if (!o) continue;
+        unsigned char* def = *(unsigned char**)(o + OBJ_DEF);
+        if (!def || *(int16_t*)(def + DEF_DLLID) != DLL_SNOWBIKE) continue;
+        if ((unsigned)*(int16_t*)(o + 0x46) == 0x72) return o;  // romDefNo
+    }
+    return NULL;
+}
+
+// Race state to the log (remote "raceinfo", for testing)
+void savestate_race_log(void) {
+    unsigned char* race = race_controller();
+    LOG_WARN("cheat", "race: controller %p started %d active %d finish %d can_finish %d abort %d done %d",
+             (void*)race, mainGetBit(RACEBIT_RACE_STARTED), mainGetBit(RACEBIT_RACE_ACTIVE),
+             mainGetBit(RACEBIT_IN_FINISH_VOLUME), mainGetBit(RACEBIT_RACE_CAN_FINISH),
+             mainGetBit(RACEBIT_ABORT_TRIGGER), mainGetBit(RACEBIT_COMPLETION_EVENT));
+    if (race) {
+        unsigned char* ex = *(unsigned char**)(race + OBJ_EXTRA);
+        if (ex) LOG_WARN("cheat", "race: phase %d flags %02X", ex[8], ex[9]);
+    }
+    // SnowBike route state: the bikes' race progress (routeState @0x28,
+    // gameBitPtr @0x60 = start/stop gamebit pair, pathProgress @0x68,
+    // riderMode @0x421, routeRank @0x422, routeFlags @0x428)
+    int start = 0, count = 0;
+    unsigned char** objs = (unsigned char**)ObjList_GetObjects(&start, &count);
+    for (int i = 0; objs && i < count; i++) {
+        unsigned char* o = objs[i];
+        if (!o) continue;
+        unsigned char* def = *(unsigned char**)(o + OBJ_DEF);
+        if (!def || *(int16_t*)(def + DEF_DLLID) != DLL_SNOWBIKE) continue;
+        unsigned char* ex = *(unsigned char**)(o + OBJ_EXTRA);
+        unsigned char* gbp = ex ? *(unsigned char**)(ex + 0x60) : NULL;
+        int b0 = gbp ? *(int16_t*)gbp : -1;
+        int b1 = gbp ? *(int16_t*)(gbp + 2) : -1;
+        LOG_WARN("cheat", "bike rom 0x%X pos %.0f %.0f %.0f bits %d/%d progress %.1f rank %d rider %d flags %02X",
+                 (unsigned)*(int16_t*)(o + 0x46), rdf(o + OBJ_LOCAL_POS), rdf(o + OBJ_LOCAL_POS + 4),
+                 rdf(o + OBJ_LOCAL_POS + 8), b0, b1, ex ? rdf(ex + 0x68) : -1.0f, ex ? (signed char)ex[0x422] : -1,
+                 ex ? ex[0x421] : -1, ex ? ex[0x428] : 0);
+    }
+    unsigned char* im = icemountain_obj();
+    unsigned char* ims = im ? *(unsigned char**)(im + OBJ_EXTRA) : NULL;
+    LOG_WARN("cheat", "icemountain %p state %d act %d bits 3A2 %d 3A3 %d 379 %d", (void*)im, ims ? ims[0] : -1,
+             ims ? ims[0x0C] : -1, mainGetBit(0x3A2), mainGetBit(0x3A3), mainGetBit(0x379));
+    savestate_log_where("race");
+}
+
+// The Ice Mountain controller (IMIceMountain, DLL 361), or NULL
+static unsigned char* icemountain_obj(void) {
+    int start = 0, count = 0;
+    unsigned char** objs = (unsigned char**)ObjList_GetObjects(&start, &count);
+    for (int i = 0; objs && i < count; i++) {
+        unsigned char* o = objs[i];
+        if (!o) continue;
+        unsigned char* def = *(unsigned char**)(o + OBJ_DEF);
+        if (def && *(int16_t*)(def + DEF_DLLID) == DLL_ICEMOUNTAIN) return o;
+    }
+    return NULL;
+}
+
+// Ice Mountain race win. The race is decided by IMIceMountain
+// (foxhollow/game/src/dlls/objects/361_IMIceMounta/IMIceMounta.c): in event
+// state 4 (racing) it waits for gamebit 0x3A3 (race over), then reads the
+// player's bike getRacePosition() (= SnowBikeState.routeRank): 1 -> state 5
+// (won: gamebit 0x379 = 1, then setMapAct 2 after the end sequence), anything
+// else -> state 6 (lost: warpToMap(0x1A), the race restarts).
+// The rank is recomputed every frame from the live route states of all bikes
+// (Checkpoint_getRouteRank compares linkDepth, then routeProgress), so the
+// rivals are pushed far behind; the player's stored rank is also set to 1 in
+// case its bike updates after the controller this frame.
+static bool icemountain_win(void) {
+    unsigned char* im = icemountain_obj();
+    if (!im) return false;
+    unsigned char* ims = *(unsigned char**)(im + OBJ_EXTRA);
+    if (!ims || ims[IM_EVENT_STATE] != IM_STATE_RACING) {
+        LOG_WARN("cheat", "ice race: not racing (state %d)", ims ? ims[IM_EVENT_STATE] : -1);
+        return false;
+    }
+    unsigned char* bike = (unsigned char*)playerGetFocusObject(Obj_GetPlayerObject());
+    if (!bike) bike = player_bike();
+    if (!bike) return false;
+    int start = 0, count = 0;
+    unsigned char** objs = (unsigned char**)ObjList_GetObjects(&start, &count);
+    for (int i = 0; objs && i < count; i++) {
+        unsigned char* o = objs[i];
+        if (!o || o == bike) continue;
+        unsigned char* def = *(unsigned char**)(o + OBJ_DEF);
+        if (!def || *(int16_t*)(def + DEF_DLLID) != DLL_SNOWBIKE) continue;
+        unsigned char* ex = *(unsigned char**)(o + OBJ_EXTRA);
+        if (!ex) continue;
+        *(int*)(ex + BIKE_ROUTE + ROUTE_LINK_DEPTH) = -100000;
+        wrf(ex + BIKE_ROUTE + ROUTE_PROGRESS, -1.0e9f);
+        ex[BIKE_ROUTE_RANK] = 2;
+    }
+    unsigned char* bex = *(unsigned char**)(bike + OBJ_EXTRA);
+    if (bex) bex[BIKE_ROUTE_RANK] = 1;
+    // The finish-line event of the player's bike (seq event 2) sets this too
+    mainSetBits(RACEBIT_IN_FINISH_VOLUME, 1);
+    // Race over: the controller decides win/lose on its next update
+    mainSetBits(RACEBIT_IM_RACE_OVER, 1);
+    // Fox gets off the bike in savestate_race_frame(), once the controller
+    // has read the rank: it reads it from the player's focus object, so
+    // dismounting now would count as no position and lose the race.
+    s_race_guard_im = im;
+    s_race_wait_frames = RACE_DISMOUNT_TIMEOUT;
+    // Shut the HUD air meter and run the bike's race-over sequence, as
+    // SnowBike_UpdateAirMeter in 597.c does. The controller waits for that
+    // sequence before it moves on to the after-race act.
+    ((void (*)(void))(*(void***)gGameUIInterface)[0x60 / 4])();
+    ((int (*)(int, void*, int))(*(void***)gObjectTriggerInterface)[0x48 / 4])(0, bike, -1);
+    LOG_WARN("cheat", "ice race won: bike %p rank %d", (void*)bike, bex ? (signed char)bex[BIKE_ROUTE_RANK] : -1);
+    return true;
+}
+
+// Per frame (touchui_frame): keeps the player off the bike after a cheat win.
+// The real finish sequence takes the player off the bike with a player seq
+// event (event 2 -> playerStopRidingObject, player.c), which also hands the
+// camera back to the player. The race-over sequence the cheat runs has no
+// such event and even re-mounts the nearest bike (player seq event 3, to get
+// ready for the restart); pressing A next to the bike mounts it as well.
+// Riding a bike after the race crashes in playerStateOnBike once the bike
+// object is freed (console tests v6 and v8), so while the guard is armed
+// (until the map changes) the player is taken off any SnowBike right away.
+// The first dismount waits until IMIceMountain has left state 4: it reads the
+// race position through the player's focus object, and no bike = lost.
+// Never just clear focusObject: the rider camera deadlocks.
+void savestate_race_frame(void) {
+    if (!s_race_guard_im) return;
+    unsigned char* im = in_game() ? icemountain_obj() : NULL;
+    if (im != s_race_guard_im) {
+        LOG_WARN("cheat", "ice race: guard off (map changed)");
+        s_race_guard_im = NULL;
+        return;
+    }
+    unsigned char* ims = *(unsigned char**)(im + OBJ_EXTRA);
+    int state = ims ? ims[IM_EVENT_STATE] : -1;
+    if (state == IM_STATE_RACING) {
+        if (s_race_wait_frames > 0 && --s_race_wait_frames == 0) {
+            LOG_WARN("cheat", "ice race: controller never decided, guard off");
+            s_race_guard_im = NULL;
+        }
+        return;
+    }
+    if (state != IM_STATE_WON && state != IM_STATE_AFTER_WIN) {
+        LOG_WARN("cheat", "ice race: controller state %d (not a win), guard off", state);
+        s_race_guard_im = NULL;
+        return;
+    }
+    void* player = Obj_GetPlayerObject();
+    unsigned char* focus = (unsigned char*)playerGetFocusObject(player);
+    if (!focus) return;
+    unsigned char* def = *(unsigned char**)(focus + OBJ_DEF);
+    if (!def || *(int16_t*)(def + DEF_DLLID) != DLL_SNOWBIKE) return;
+    int r = playerStopRidingObject(player);
+    LOG_WARN("cheat", "ice race: off the bike %p (%d), controller state %d", (void*)focus, r, state);
+}
+
+bool savestate_cheat_winrace(void) {
+    if (!in_game()) return false;
+    return icemountain_win();
+}

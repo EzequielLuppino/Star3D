@@ -400,6 +400,29 @@ these defaults is ignored once. For bug reports, turn Logging on (or put
 `S3D_LOG_VERBOSE=1` in `env.txt`): with it off, only warnings and errors are
 logged after the first frame.
 
+## Cheats
+
+The Cheats tab (in the touch-screen Settings) has On/Off rows: Infinite
+health, Infinite magic, Max scarabs, One-hit kill, Giant Fox, Tiny Fox and
+Moon jump (hold L). It also has two one-tap actions: "Heal now" and "Win Ice
+Mountain race".
+
+"Win Ice Mountain race" wins the SnowBike race on Ice Mountain against the
+two SnowClaw riders. Get on the bike so the race is running, then tap the
+row. The race ends as a first place, and the game moves on as if you
+crossed the finish line first. Outside the race, the row shows "Not in the
+Ice Mountain race" and does nothing.
+
+How it works (`3DS/port/savestate_3ds.c`): the map's own controller,
+IMIceMountain (`foxhollow/game/src/dlls/objects/361_IMIceMounta`), picks win
+or lose from the player's race position when the race ends. The cheat puts
+the two rival bikes last in the ranking and gives the player first place.
+It then ends the race and plays the end-of-race scene. Once the game counts
+the win, the cheat takes Fox off the bike the game's own way. Until you
+leave the map, it keeps him off any snow bike. Riding a bike after the race
+would crash the game once the bike is removed. So after using the cheat,
+the bike can't be ridden again until you leave Ice Mountain and come back.
+
 ## Languages
 
 The game text can be English, French, German, Italian or Spanish, as on the
