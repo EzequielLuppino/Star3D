@@ -194,7 +194,10 @@ class TexConverter:
         self.max_size = max_size
         self.scale = int(scale)
         self.jobs = jobs or os.cpu_count() or 1
-        self.tag = f"q{self.quality}m{self.mipmaps}s{self.max_size}x{self.scale}"
+        # g1: mips filtered in gamma space (texconv.c half_size_gamma); bump
+        # it whenever the converter's output changes, so old cache entries are
+        # not reused
+        self.tag = f"q{self.quality}m{self.mipmaps}s{self.max_size}x{self.scale}g1"
         os.makedirs(cache_dir, exist_ok=True)
         lib = ctypes.CDLL(lib_path)
         if lib.tc_stats_size() != struct.calcsize(STATS_FORMAT):

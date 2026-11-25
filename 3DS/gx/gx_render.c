@@ -96,7 +96,7 @@ static u32 s_frame_number;
 static bool s_dumping;
 static bool s_cap_dump;            // s_dumping comes from the render capture (no hold)
 static C3D_Tex s_white_tex;
-static bool s_tex_mips = true;    // S3D_TEX_MIPS
+static bool s_tex_mips = false;   // S3D_TEX_MIPS (off by default, see gx_render_init)
 static float s_tex_lod_bias;      // S3D_TEX_LODBIAS_X4 / 4
 static int s_dbg_mip;             // S3D_DBG_MIP: 0 off, N = every mipmapped texture sampled at level N-1 only
 // S3D_RT_DEDUP (MULTICORE_PLAN.md, "Render thread: redundant work"), bit 0:
@@ -240,7 +240,15 @@ bool gx_render_set_shader(shaderInstance_s* vsh) {
 }
 
 void gx_render_init(void) {
-    s_tex_mips = cfg_bool("S3D_TEX_MIPS", true);
+    // Mipmapping is off by default: every texture is sampled at level 0. On
+    // the 240p top screen with half-size textures the GPU picked small levels
+    // a lot, where thin details smear into their surroundings: Ice Mountain's
+    // snowy rock showed dark triangles that moved with the camera (the snow
+    // band blended with the rock rows at levels 2-3), and distant surfaces
+    // turned pale (OPEN_BUGS 23). Level 0 everywhere looked right on hardware
+    // with no visible shimmer. S3D_TEX_MIPS=1 turns the mip chains back on
+    // (the game data still carries them)
+    s_tex_mips = cfg_bool("S3D_TEX_MIPS", false);
     s_tex_lod_bias = cfg_int("S3D_TEX_LODBIAS_X4", 0) / 4.0f;
     s_rt_dedup = cfg_int("S3D_RT_DEDUP", 5);
     s_dbg_mip = cfg_int("S3D_DBG_MIP", 0);

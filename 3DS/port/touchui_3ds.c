@@ -191,7 +191,9 @@ static const Row settings_rows[] = {
     // Both sticks at once, 0% = none, 100% = the whole throw (controls_3ds.c)
     { "Stick dead zone", ROW_CHOICE, "S3D_DEADZONE_PCT", 15, deadzone_choices, deadzone_names },
     { "Texture blur (LOD bias)", ROW_CHOICE, "S3D_TEX_LODBIAS_X4", 0, lod_choices, lod_names, .advanced = true },
-    { "Texture resolution", ROW_CHOICE, "S3D_TEX_RES", 0, tex_res_choices, tex_res_names },
+    // Hidden: it clamps the mip level, so it does nothing with mipmapping off
+    // (S3D_TEX_MIPS, default off)
+    { "Texture resolution", ROW_CHOICE, "S3D_TEX_RES", 0, tex_res_choices, tex_res_names, .advanced = true },
     // Bug 45, hidden from the everyday menu (S3D_MENU_ADVANCED=1 lists them):
     // the per-viewport depth remap (exact GX depth; off makes the projected
     // shadows flicker), the effect-pass bias (Off) and the light-pool bias

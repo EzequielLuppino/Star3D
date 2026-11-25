@@ -14,7 +14,8 @@
 // them); the runtime recognises converted data by the PicaTexHeader magic.
 // Non-power-of-two images are resampled (repeat/mirror wrap) or padded
 // (clamp, with a UV scale in the header). Mipmaps are generated down to 8x8
-// with gamma-correct filtering. Formats are chosen per texture from its pixels
+// with a 2x2 box filter on the stored (gamma) values, like the GPU's own
+// filtering (see half_size_gamma). Formats are chosen per texture from its pixels
 // (see choose_format), ETC1 only when it meets the PSNR threshold.
 
 #include <math.h>
@@ -343,6 +344,34 @@ static u8* half_size(const u8* rgba, int w, int h) {
                 }
             u8* o = &res[(y * nw + x) * 4];
             for (int k = 0; k < 3; k++) o[k] = a > 1e-5f ? lin_to_s(c[k] / a) : 0;
+            o[3] = (u8)(a / 4.0f * 255.0f + 0.5f);
+        }
+    }
+    return res;
+}
+
+// 2x2 box filter on the stored (gamma) values, alpha-weighted: the mip chain.
+// The PICA, like the GameCube, filters texels as stored (no sRGB textures),
+// so level 0 seen from afar averages in gamma space. Levels built in linear
+// light (half_size) came out brighter at every step (up to +50 on dark,
+// high-contrast textures at the last level), so triangles switching mip
+// levels showed brightness seams that moved with the camera (Ice Mountain
+// rock under the log) and distant surfaces turned pale (bug 23).
+static u8* half_size_gamma(const u8* rgba, int w, int h) {
+    int nw = w > 1 ? w / 2 : 1, nh = h > 1 ? h / 2 : 1;
+    u8* res = malloc((size_t)nw * nh * 4);
+    for (int y = 0; y < nh; y++) {
+        for (int x = 0; x < nw; x++) {
+            float c[3] = { 0, 0, 0 }, a = 0;
+            for (int dy = 0; dy < 2; dy++)
+                for (int dx = 0; dx < 2; dx++) {
+                    const u8* p = &rgba[((clampi(y * 2 + dy, 0, h - 1)) * w + clampi(x * 2 + dx, 0, w - 1)) * 4];
+                    float pa = p[3] / 255.0f;
+                    for (int k = 0; k < 3; k++) c[k] += p[k] * pa;
+                    a += pa;
+                }
+            u8* o = &res[(y * nw + x) * 4];
+            for (int k = 0; k < 3; k++) o[k] = a > 1e-5f ? (u8)(c[k] / a + 0.5f) : 0;
             o[3] = (u8)(a / 4.0f * 255.0f + 0.5f);
         }
     }
@@ -804,7 +833,7 @@ static u32 build_image(const u8* rgba, u32 w, u32 h, int gx_fmt, int wrap_s, int
         else encode_plain(level, lw, lh, pf, dst);
         dst += pica_level_size(pf, lw, lh);
         if (l + 1 < levels) {
-            u8* next = half_size(level, lw, lh);
+            u8* next = half_size_gamma(level, lw, lh);
             if (level != img) free(level);
             level = next;
             lw /= 2;

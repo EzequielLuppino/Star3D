@@ -378,8 +378,18 @@ which apply while the mode is unset.
 The renderer and debug options are hidden and keep their defaults: render
 thread on core 2, state deltas on, far animation LOD strong, back-face culling
 on, per-pixel lighting on, fur shading/wind/layer budget on, water ripples and
-caustics on, heat haze on, texture LOD 0, lean shaders "fast math" and the
-debug mip level off. `S3D_MENU_ADVANCED=1` in `env.txt` lists them again.
+caustics on, heat haze on, texture LOD 0, texture resolution Full, lean
+shaders "fast math" and the debug mip level off. `S3D_MENU_ADVANCED=1` in
+`env.txt` lists them again.
+
+Mipmapping is off (`S3D_TEX_MIPS`, default 0): every texture is drawn from
+its full-size image. On the 240p top screen the GPU otherwise picked the
+small mip levels a lot, where thin details smear into their surroundings,
+for example dark triangles on Ice Mountain's snowy rocks that moved with the
+camera, and pale distant ground. "Texture resolution" and "Texture blur" only
+work on the mip levels, so they do nothing now and are hidden.
+`S3D_TEX_MIPS=1` in `env.txt` turns mipmapping back on; the game data still
+has the mip levels.
 `S3D_RT_DELTA=0` switches the state deltas off (the old per-setter recording),
 and `S3D_RT_DELTA=2` in a PROFILE build records every setter as well and
 checks each delta against the replayed state, logging any mismatch.
