@@ -53,7 +53,9 @@ git submodule update --init --recursive
 ## Building
 
 Copy your disc image (`.iso`, GSAP01 rev 1) into the repository root, next
-to the `Dockerfile`. Any file name works, but keep only one `.iso` there.
+to the `Dockerfile`. Any file name works, spaces included, but keep only one
+`.iso` there. Names with `#` or `$` still need renaming (e.g.
+`starfox-adventures.iso`).
 Compressed images (RVZ, GCZ, WBFS, NKit...) must first be converted to a
 plain ISO, for example with Dolphin (right-click the game > Convert File > ISO).
 

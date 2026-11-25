@@ -230,7 +230,13 @@ GENERATED_HEADERS := $(SHADER_HEADERS) $(BUILD_DIR)/gxrec_gen.h
 ### Game data ###
 # The disc image is extracted into a RomFS directory at build time (only when
 # the ISO or the extractor changes) and embedded in the .3dsx.
-ISO ?= $(firstword $(wildcard ../*.iso))
+# Looked up with a shell glob, not make's $(wildcard), so a file name with
+# spaces survives. ISO_ESC is the same name with the spaces escaped, the only
+# form make accepts in prerequisite lists (issue #2).
+EMPTY :=
+SPACE := $(EMPTY) $(EMPTY)
+ISO ?= $(shell ls ../*.iso 2>/dev/null | head -n 1)
+ISO_ESC := $(subst $(SPACE),\$(SPACE),$(ISO))
 ROMFS_DIR   := $(BUILD_ROOT)/romfs
 ROMFS_STAMP := $(ROMFS_DIR)/.extract_stamp.json
 
@@ -333,7 +339,7 @@ help:
 	@echo "  clean          remove all build outputs"
 	@echo "Variables: NO_CIA=1, NO_GAMEDATA=1, DATA_VERSION=N, PROFILE=1 (see README)"
 
-$(ROMFS_STAMP): $(ISO) $(CONVERT_SCRIPTS) $(TEXCONV_LIB) $(MESHSIMP_LIB) $(CONVERT_OPTIONS)
+$(ROMFS_STAMP): $(ISO_ESC) $(CONVERT_SCRIPTS) $(TEXCONV_LIB) $(MESHSIMP_LIB) $(CONVERT_OPTIONS)
 	@if [ -z "$(ISO)" ]; then \
 		echo "error: no disc image found. Put your GameCube disc image (.iso, GSAP01) in the repository root" >&2; \
 		echo "       (next to the Dockerfile), or pass ISO=path/to/game.iso" >&2; \
