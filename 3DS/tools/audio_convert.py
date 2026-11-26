@@ -7,11 +7,13 @@ format and played without any CPU decoding:
   transcoded to DSP-ADPCM. DTK's four fixed prediction filters are exactly
   representable as DSP-ADPCM coefficients, so every DTK block maps onto two
   DSP-ADPCM frames per channel without re-quantizing; only the decoder's
-  history precision differs (16 instead of 22 bits). The file keeps its size:
-  it is a sequence of chunks of STREAM_CHUNK_BYTES (the last one shorter),
-  each holding the left channel's frames followed by the right channel's, so
-  one read gives two buffers the DSP can play directly. port/audio_3ds.c reads
-  this layout; the coefficients are STREAM_COEFS (fixed, so no header).
+  history precision differs (16 instead of 22 bits), and in loud passages
+  that makes the DSP's decode drift and click, so port/audio_3ds.c decodes
+  these frames on the CPU the GameCube way (the mapping is lossless) and
+  plays PCM. The file keeps its size: it is a sequence of chunks of
+  STREAM_CHUNK_BYTES (the last one shorter), each holding the left channel's
+  frames followed by the right channel's. port/audio_3ds.c reads this layout;
+  the coefficients are STREAM_COEFS (fixed, so no header).
 
 * MusyX sample banks (/audio/*.sdi + *.sam) are already DSP-ADPCM, but the DSP
   can only start a buffer at a 14-sample frame boundary and most loops start
@@ -235,7 +237,7 @@ def convert_sample_bank(sdi, sam):
         worst = max(worst, error)
         new_data[index] = data
         struct.pack_into(">II", sdi, index * 32 + 0x10, comp << 24 | length, loop)
-        struct.pack_into(">Bxhh", sdi, extra + 3, loop_ps, loop_y0, loop_y1)
+        struct.pack_into(">Bhh", sdi, extra + 3, loop_ps, loop_y0, loop_y1)
 
     # Lay the samples out again (32-byte aligned), shared offsets stay shared
     out = bytearray()

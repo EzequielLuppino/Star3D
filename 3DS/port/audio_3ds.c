@@ -4,9 +4,11 @@
 // - MusyX voices: port/musyx_ndsp.c, driven by the ndsp frame callback below.
 // - Disc streams (voice acting, /streams/*.adp): transcoded at build time to
 //   DSP-ADPCM in chunks of STREAM_CHUNK_BYTES, left half then right half (see
-//   tools/audio_convert.py). A reader thread loads chunks from the RomFS into a
-//   ring of linear buffers (so the game never waits for the SD card), and the
-//   ndsp thread queues them on two channels that the DSP decodes itself.
+//   tools/audio_convert.py). A reader thread loads chunks from the RomFS,
+//   decodes them to PCM16 the way the GameCube decodes DTK (the DSP's own
+//   ADPCM decoder clamps its history and clicks in loud passages) into a ring
+//   of linear buffers (so the game never waits for the SD card), and the ndsp
+//   thread queues them on two channels.
 // - AI DMA: the game's PCM DMA interface works like the GameCube's: a buffer
 //   is played and the DMA callback supplies the next one. MusyX no longer
 //   renders into it, but the attract movie mixes its audio into these buffers.
@@ -23,7 +25,9 @@
 #include <musyx/musyx.h>
 #include <musyx/pc.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include "config.h"
 #include "log.h"
 #include "port_3ds.h"
 #include "profiler.h"
@@ -234,8 +238,7 @@ u32 AIGetDSPSampleRate(void) { return sDspSampleRate; }
 #define STREAM_LEFT        PORT_NDSP_STREAM_LEFT
 #define STREAM_RIGHT       PORT_NDSP_STREAM_RIGHT
 
-// DTK's prediction filters as DSP-ADPCM coefficients (tools/audio_convert.py)
-static const u16 kStreamCoefs[16] = { 0, 0, 1920, 0, 3680, (u16)-1664, 3136, (u16)-1760 };
+#define STREAM_CHUNK_SAMPLES (STREAM_CHUNK_BYTES / 2 / 8 * 14)  // Per channel
 
 enum { SLOT_FREE, SLOT_READY, SLOT_QUEUED };
 typedef struct {
@@ -253,19 +256,51 @@ static LightLock sStreamIoLock;  // File and read position, shared with the read
 static LightEvent sStreamIoEvent;
 static Thread sStreamThread;
 static StreamSlot sSlots[STREAM_SLOTS];
-static u8* sStreamData;          // STREAM_SLOTS chunks of linear memory
+static u8* sStreamData;          // One chunk read from the file
+static s16* sStreamPcm;          // STREAM_SLOTS decoded chunks of linear memory, left then right
+static s32 sDtkHist[2][2];       // Decoder history per channel (DTK keeps 6 fraction bits)
 static FILE* sStreamFile;
 static u32 sStreamLength, sStreamReadPos;
 static u32 sFillSlot, sQueueSlot;
 static volatile bool sStreamActive;   // Started and not finished
-static volatile bool sStreamFirstChunk;
-static ndspAdpcmData sStreamAdpcm[2];
 static u32 sStreamSamplesPlayed;
 static u64 sStreamSilentStart;
 
 static u32 stream_samples(u32 bytes) { return bytes / STREAM_BLOCK_BYTES * 28; }
 
 static void stream_fill(void);
+
+// Decode one channel of a chunk. The build remapped each DTK header to a
+// DSP-ADPCM one (pred << 4 | (12 - shift)); this undoes it and decodes like
+// the GameCube (Dolphin's ADPDecodeSample): the history keeps 6 fraction bits
+// and is not clamped to 16 bits, only the prediction is.
+static void stream_decode(const u8* src, u32 frames, s16* out, s32* hist) {
+    s32 h1 = hist[0], h2 = hist[1];
+    for (u32 f = 0; f < frames; f++, src += 8) {
+        u32 pred = src[0] >> 4;
+        u32 shift = 12 - (src[0] & 15);
+        for (int i = 0; i < 14; i++) {
+            u32 nib = (i & 1) ? (src[1 + i / 2] & 15) : (src[1 + i / 2] >> 4);
+            s32 p;
+            switch (pred) {
+            case 1: p = h1 * 0x3c; break;
+            case 2: p = h1 * 0x73 - h2 * 0x34; break;
+            case 3: p = h1 * 0x62 - h2 * 0x37; break;
+            default: p = 0; break;
+            }
+            p = (p + 0x20) >> 6;
+            if (p > 0x1fffff) p = 0x1fffff;
+            if (p < -0x200000) p = -0x200000;
+            s32 cur = ((s32)(s16)(u16)(nib << 12) >> shift) * 64 + p;
+            h2 = h1;
+            h1 = cur;
+            cur >>= 6;
+            *out++ = cur > 32767 ? 32767 : cur < -32768 ? -32768 : (s16)cur;
+        }
+    }
+    hist[0] = h1;
+    hist[1] = h2;
+}
 
 static void stream_thread(void* arg) {
     (void)arg;
@@ -333,7 +368,8 @@ static void stream_apply_volume(void) {
 static void stream_fill(void) {
     while (sStreamFile && sStreamReadPos < sStreamLength && sSlots[sFillSlot].state == SLOT_FREE) {
         StreamSlot* slot = &sSlots[sFillSlot];
-        u8* dst = sStreamData + sFillSlot * STREAM_CHUNK_BYTES;
+        u8* dst = sStreamData;
+        s16* pcm = sStreamPcm + sFillSlot * 2 * STREAM_CHUNK_SAMPLES;
         u32 bytes = sStreamLength - sStreamReadPos;
         if (bytes > STREAM_CHUNK_BYTES) bytes = STREAM_CHUNK_BYTES;
         if (fseek(sStreamFile, sStreamReadPos, SEEK_SET) != 0 || fread(dst, 1, bytes, sStreamFile) != bytes) {
@@ -341,13 +377,15 @@ static void stream_fill(void) {
             sStreamReadPos = sStreamLength;
             break;
         }
-        DSP_FlushDataCache(dst, bytes);
-        u32 half = bytes / 2;
+        u32 frames = bytes / 2 / 8;
         memset(slot->wb, 0, sizeof(slot->wb));
         for (int ch = 0; ch < 2; ch++) {
-            slot->wb[ch].data_vaddr = dst + ch * half;
-            slot->wb[ch].nsamples = half / 8 * 14;
+            s16* out = pcm + ch * STREAM_CHUNK_SAMPLES;
+            stream_decode(dst + ch * (bytes / 2), frames, out, sDtkHist[ch]);
+            slot->wb[ch].data_vaddr = out;
+            slot->wb[ch].nsamples = frames * 14;
         }
+        DSP_FlushDataCache(pcm, 2 * STREAM_CHUNK_SAMPLES * sizeof(s16));
         slot->bytes = bytes;
         __dmb();
         slot->state = SLOT_READY;
@@ -362,15 +400,7 @@ static void stream_frame(void) {
     if (!sStreamActive || LightLock_TryLock(&sStreamLock) != 0) return;
     while (sStreamActive && sSlots[sQueueSlot].state == SLOT_READY) {
         StreamSlot* slot = &sSlots[sQueueSlot];
-        for (int ch = 0; ch < 2; ch++) {
-            if (sStreamFirstChunk) {
-                const u8* data = slot->wb[ch].data_vaddr;
-                sStreamAdpcm[ch] = (ndspAdpcmData){ data[0], 0, 0 };
-                slot->wb[ch].adpcm_data = &sStreamAdpcm[ch];
-            }
-            ndspChnWaveBufAdd(ch ? STREAM_RIGHT : STREAM_LEFT, &slot->wb[ch]);
-        }
-        sStreamFirstChunk = false;
+        for (int ch = 0; ch < 2; ch++) ndspChnWaveBufAdd(ch ? STREAM_RIGHT : STREAM_LEFT, &slot->wb[ch]);
         slot->state = SLOT_QUEUED;
         sQueueSlot = (sQueueSlot + 1) % STREAM_SLOTS;
     }
@@ -425,9 +455,10 @@ int fhAIPrepareStream(void* fileInfoPtr) {
         return 0;
     }
     port_audio_ndsp_ready();
-    if (sNdsp && !sStreamData) {
-        sStreamData = linearAlloc(STREAM_SLOTS * STREAM_CHUNK_BYTES);
-        if (!sStreamData) {
+    if (sNdsp && !sStreamPcm) {
+        if (!sStreamData) sStreamData = malloc(STREAM_CHUNK_BYTES);
+        sStreamPcm = linearAlloc(STREAM_SLOTS * 2 * STREAM_CHUNK_SAMPLES * sizeof(s16));
+        if (!sStreamData || !sStreamPcm) {
             LOG_ERROR("audio", "no linear memory for stream buffers");
             return 0;
         }
@@ -449,20 +480,19 @@ int fhAIPrepareStream(void* fileInfoPtr) {
     sStreamLength = fileInfo->length;
     sStreamReadPos = 0;
     sFillSlot = sQueueSlot = 0;
+    memset(sDtkHist, 0, sizeof(sDtkHist));
     LightLock_Unlock(&sStreamIoLock);
     sStreamSamplesPlayed = 0;
     sStreamPlayState = AI_STREAM_STOP;
-    sStreamFirstChunk = true;
     LOG_DEBUG("audio", "stream %s (%.1f s)", path, stream_samples(sStreamLength) / (float)STREAM_RATE);
 
     if (sNdsp) {
         for (int ch = 0; ch < 2; ch++) {
             int id = ch ? STREAM_RIGHT : STREAM_LEFT;
             ndspChnReset(id);
-            ndspChnSetFormat(id, NDSP_FORMAT_MONO_ADPCM);
+            ndspChnSetFormat(id, NDSP_FORMAT_MONO_PCM16);
             ndspChnSetRate(id, STREAM_RATE);
             ndspChnSetInterp(id, NDSP_INTERP_POLYPHASE);
-            ndspChnSetAdpcmCoefs(id, (u16*)kStreamCoefs);
         }
         stream_apply_volume();
         LightEvent_Signal(&sStreamIoEvent);  // Read ahead before the game starts the stream
@@ -515,6 +545,20 @@ u8 AIGetStreamVolRight(void) { return sStreamVolRight; }
 // Called once per frame from VIWaitForRetrace
 void fhAIPump(void) {
     PROF_ZONE("audio.pump");
+    // Live audio test knobs (cmd.txt): master volume in percent and the DSP's
+    // clipping mode (1 soft, ndsp's default; 0 normal), to tell clipping apart
+    // from other crackle
+    static int masterVol = -1, clipSoft = -1;
+    int vol = masterVol, soft = clipSoft;
+    CFG_LIVE(vol, cfg_int("S3D_AUDIO_MASTER", 100));
+    CFG_LIVE(soft, cfg_int("S3D_AUDIO_SOFTCLIP", 1));
+    if (sNdsp && (vol != masterVol || soft != clipSoft)) {
+        masterVol = vol;
+        clipSoft = soft;
+        ndspSetMasterVol(vol / 100.0f);
+        ndspSetClippingMode(soft ? NDSP_CLIP_SOFT : NDSP_CLIP_NORMAL);
+        LOG_WARN("audio", "test: master volume %d%%, %s clipping", vol, soft ? "soft" : "normal");
+    }
     port_musyx_pump_silent();
     pump_dma();
     stream_pump();

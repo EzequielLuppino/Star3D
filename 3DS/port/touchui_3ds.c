@@ -81,6 +81,9 @@ static const int rt_choices[] = { 2, 0, 1, INT32_MIN };
 static const char* const rt_names[] = { "Off", "Test (1 core)", "Core 2" };
 // S3D_VSH_LEAN bits: 1 affine texture coordinates, 2 skip unused slots
 static const int lean_choices[] = { 3, 0, 1, 2, INT32_MIN };
+// Audio crackle test (temporary, port/audio_3ds.c S3D_AUDIO_MASTER)
+static const int master_vol_choices[] = { 100, 70, 50, 25, INT32_MIN };
+static const char* const master_vol_names[] = { [25] = "25%", [50] = "50%", [70] = "70%", [100] = "100%" };
 static const char* const lean_names[] = { "Off", "Fast math", "Skip slots", "On" };
 static const char* const lod_names[] = { "0", NULL, "+0.5", NULL, "+1" };
 // S3D_DBG_MIP: sample every mipmapped texture at one level (debug)
@@ -203,6 +206,7 @@ static const Row settings_rows[] = {
     { "Depth: pool bias", ROW_CHOICE, "S3D_DEPTH_POOL_EPS_X1000", 2, eps_choices, eps_names, .advanced = true },
     { "Lean shaders", ROW_CHOICE, "S3D_VSH_LEAN", 1, lean_choices, lean_names, .advanced = true },
     { "Debug: mip level", ROW_CHOICE, "S3D_DBG_MIP", 0, mip_choices, mip_names, .advanced = true },
+    { "Test: master volume", ROW_CHOICE, "S3D_AUDIO_MASTER", 100, master_vol_choices, master_vol_names },
     { "Logging", ROW_LOG },
     { "Log snapshot (mark)", ROW_ACTION, .action = do_mark },
     { "Import saves", ROW_ACTION, .action = open_import },
