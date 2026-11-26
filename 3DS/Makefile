@@ -49,7 +49,15 @@ COMMON_DEFINES := -DAURORA -DTARGET_PC -D__3DS__ -D_3DS -DARM11 -DTARGET_N3DS \
 PATCHED_INC := $(BUILD_DIR)/patched_include
 # citro3d is built from source (third_party/citro3d, 1.7.1, zlib license), so
 # its headers come before devkitPro's copy (MULTICORE_PLAN.md "Thin emitter")
-COMMON_INCLUDES := -Ithird_party/citro3d/include -I$(FOX)/port/include -I$(FOX)/extern/aurora/include \
+# MusyX output (MUSYX_SRCS): soft (default, MusyX's software renderer) or dsp
+# (one ndsp channel per voice). The choice goes into a generated header, so
+# make's dependency files rebuild everything that reads it when it changes
+# (a -D flag would leave stale objects behind).
+MUSYX_MIX ?= soft
+MUSYX_MIX_H := $(BUILD_DIR)/gen/musyx_mix.h
+MUSYX_MIX_LINE := $(if $(filter soft,$(MUSYX_MIX)),\043define PORT_MUSYX_SOFT 1,/* MUSYX_MIX=$(MUSYX_MIX) */)
+$(shell mkdir -p $(BUILD_DIR)/gen; printf '$(MUSYX_MIX_LINE)\n' | cmp -s - $(MUSYX_MIX_H) || printf '$(MUSYX_MIX_LINE)\n' > $(MUSYX_MIX_H))
+COMMON_INCLUDES := -I$(BUILD_DIR)/gen -Ithird_party/citro3d/include -I$(FOX)/port/include -I$(FOX)/extern/aurora/include \
                    -I$(PATCHED_INC) -I$(FOX)/game/include -I$(FOX)/game -I$(FOX)/extern/musyx/include \
                    -I$(CTRULIB)/include -I$(PORTLIBS)/include
 BASE_CFLAGS := $(ARCH) -mword-relocations -ffunction-sections -fdata-sections \
@@ -103,9 +111,11 @@ FOX_PORT_SRCS := aram_shim.c cache_shim.c foxhollow_breadcrumb.c foxhollow_confi
                  game_math_port.c gx_shim.c model_anim_joints.c os_font_shim.c \
                  os_msg_shim.c os_stopwatch_shim.c os_thread_shim.c ppc_shim.c
 
-# MusyX (PC target) and Aurora's C matrix library. The PC software renderer
-# (hw_pc.c, hw_pc_output.c, hw_pc_rate.c) and sample memory (hw_aramdma.c) are
-# replaced by port/musyx_ndsp.c, which plays voices on the 3DS DSP.
+# MusyX (PC target) and Aurora's C matrix library. Sample memory
+# (hw_aramdma.c) is replaced by port/musyx_ndsp.c. MUSYX_MIX=soft (default):
+# MusyX's software renderer (hw_pc.c, hw_pc_output.c, hw_pc_rate.c) on a
+# helper thread into one stereo channel (port/musyx_soft_3ds.c). MUSYX_MIX=dsp:
+# one ndsp channel per voice (port/musyx_ndsp.c; crackles, 21 voices).
 MUSYX_SRCS := $(addprefix runtime/, seq.c synth.c seq_api.c snd_synthapi.c stream.c \
                 synthdata.c synthmacros.c synthvoice.c synth_ac.c synth_adsr.c \
                 synth_vsamples.c synth_dbtab.c s_data.c hw_dspctrl.c hw_volconv.c snd3d.c \
@@ -114,6 +124,9 @@ MUSYX_SRCS := $(addprefix runtime/, seq.c synth.c seq_api.c snd_synthapi.c strea
                 hw_pc_samples.c hw_pc_assets.c hw_pc_decode.c hw_memory.c \
                 hw_lib_dolphin.c hw_pc_null.c CheapReverb/creverb_fx.c CheapReverb/creverb.c \
                 StdReverb/reverb_fx.c StdReverb/reverb.c Delay/delay_fx.c Chorus/chorus_fx.c)
+ifeq ($(MUSYX_MIX),soft)
+  MUSYX_SRCS += runtime/hw_pc.c runtime/hw_pc_output.c runtime/hw_pc_rate.c
+endif
 MTX_SRCS := mtx.c mtx44.c mtxstack.c mtxvec.c quat.c vec.c
 
 # 3DS platform layer
@@ -422,6 +435,25 @@ $(BUILD_DIR)/fox/port/%.o: $(FOX)/port/src/%.c
 	@mkdir -p $(dir $@)
 	@echo "CC  $<"
 	@$(CC) -c $(FOX_CFLAGS) -I$(FOX)/port/src -MMD -MP -o $@ $<
+
+# MusyX sources with a build-time fix: patches-musyx/<path>.sed is applied to
+# extern/musyx/src/musyx/<path> into the build directory, like patches/ for the
+# game code. A static pattern rule, so it wins over the plain rule below.
+MUSYX_PATCHED := $(patsubst patches-musyx/%.sed,%,$(shell find patches-musyx -name '*.c.sed' 2>/dev/null))
+MUSYX_PATCHED_OBJS := $(addprefix $(BUILD_DIR)/fox/musyx/,$(filter $(MUSYX_PATCHED),$(MUSYX_SRCS)))
+$(BUILD_DIR)/musyx_patched/%.c: $(FOX)/extern/musyx/src/musyx/%.c patches-musyx/%.c.sed
+	@mkdir -p $(dir $@)
+	@echo "SED $<"
+	@tr -d '\r' < $< > $@.orig
+	@sed -f patches-musyx/$*.c.sed $@.orig > $@.tmp
+	@if cmp -s $@.orig $@.tmp; then echo "error: patches-musyx/$*.c.sed did not change $<" >&2; rm -f $@.orig $@.tmp; exit 1; fi
+	@rm -f $@.orig
+	@mv $@.tmp $@
+
+$(MUSYX_PATCHED_OBJS:.c=.o): $(BUILD_DIR)/fox/musyx/%.o: $(BUILD_DIR)/musyx_patched/%.c
+	@mkdir -p $(dir $@)
+	@echo "CC  $< (patched)"
+	@$(CC) -c $(FOX_CFLAGS) -I$(FOX)/extern/musyx/src/musyx/$(dir $*) -MMD -MP -o $@ $<
 
 $(BUILD_DIR)/fox/musyx/%.o: $(FOX)/extern/musyx/src/musyx/%.c
 	@mkdir -p $(dir $@)

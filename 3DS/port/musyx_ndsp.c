@@ -1,6 +1,8 @@
 // MusyX hardware layer for the 3DS DSP, replacing foxhollow's software
 // renderer (hw_pc.c, hw_pc_output.c, hw_pc_rate.c and the PC part of
-// hw_aramdma.c).
+// hw_aramdma.c). Built with MUSYX_MIX=dsp only: the default build uses that
+// software renderer (port/musyx_soft_3ds.c) and keeps just the sample memory,
+// debugger and save state parts of this file.
 //
 // On the GameCube, MusyX's synthesizer runs every 5 ms and hands per-voice
 // parameters (sample, pitch, volumes, envelope) to the DSP, which decodes
@@ -49,6 +51,8 @@
 
 extern u32 last_rnd;
 
+#ifndef PORT_MUSYX_SOFT
+
 typedef struct {
     ndspWaveBuf wb[2];         // Up to the loop start, then the looping part
     ndspAdpcmData adpcm[2];
@@ -61,18 +65,6 @@ typedef struct {
 } HwVoice;
 
 static HwVoice sHw[PORT_NDSP_MUSYX_CHANNELS];
-
-// Crackle tests (live, cmd.txt "set NAME VALUE"):
-//   S3D_MUSYX_INTERP 0 as MusyX asks, interpolation re-sent on every rate change
-//                    1 linear, set once per voice
-//                    2 as MusyX asks, but sent only when the mode changes
-//   S3D_MUSYX_GAIN   voice gain in percent (default 100)
-//   S3D_MUSYX_STATS  1: a stats line every ~5 s (WARN, so it is logged)
-static int sInterpMode, sGainPct = 100, sStats;
-static struct {
-    u32 starts, cuts, rates, interps, mixes, active;
-    float peak;
-} sSt;
 static bool sNdsp;
 static SND_SOME_CALLBACK sTick;
 static volatile bool sTicking;
@@ -218,10 +210,7 @@ void salActivateStudio(u8 studio, u32 isMaster, SND_STUDIO_TYPE type) {
 
 static void hw_stop(u32 idx) {
     HwVoice* hw = &sHw[idx];
-    if (hw->playing && sNdsp) {
-        if (hw->mix[0] > 0.01f || hw->mix[1] > 0.01f) sSt.cuts++;  // Cut while audible
-        ndspChnWaveBufClear(idx);
-    }
+    if (hw->playing && sNdsp) ndspChnWaveBufClear(idx);
     hw->playing = false;
 }
 
@@ -283,7 +272,6 @@ static bool hw_start(u32 idx, DSPvoice* vp) {
         loopStart -= loopStart % 14;
     }
 
-    sSt.starts++;
     hw->playing = true;
     hw->looping = loop;
     hw->rate = 0;
@@ -349,32 +337,21 @@ static void hw_update(u32 idx, DSPvoice* vp, u32 env) {
     if (rate != hw->rate) {
         hw->rate = rate;
         ndspChnSetRate(idx, (float)rate);
-        sSt.rates++;
-        if (sInterpMode == 0) hw->interp = 0xffff;  // The polyphase variant depends on the rate
+        hw->interp = 0xffff;  // The polyphase variant depends on the rate
     }
     u16 interp = vp->srcTypeSelect == SAL_SRC_NONE     ? NDSP_INTERP_NONE
                  : vp->srcTypeSelect == SAL_SRC_LINEAR ? NDSP_INTERP_LINEAR
                                                        : NDSP_INTERP_POLYPHASE;
-    if (sInterpMode == 1) interp = NDSP_INTERP_LINEAR;
     if (interp != hw->interp) {
         hw->interp = interp;
         ndspChnSetInterp(idx, interp);
-        sSt.interps++;
     }
 
     // Surround goes to both sides at -3 dB, as in foxhollow's stereo downmix
     float s = gain(vp->volS, env) * 0.70710678f;
     float l = gain(vp->volL, env) + s;
     float r = gain(vp->volR, env) + s;
-    if (sGainPct != 100) {
-        l *= sGainPct / 100.0f;
-        r *= sGainPct / 100.0f;
-    }
-    sSt.active++;
-    if (l > sSt.peak) sSt.peak = l;
-    if (r > sSt.peak) sSt.peak = r;
     if (l != hw->mix[0] || r != hw->mix[1]) {
-        sSt.mixes++;
         hw->mix[0] = l;
         hw->mix[1] = r;
         float mix[12] = {l, r};
@@ -395,24 +372,6 @@ static void end_voice(DSPvoice* vp) {
 // One 5 ms cycle, called by snd_handle_irq before the synthesizer runs
 void salCtrlDsp(s16* dest) {
     (void)dest;
-    CFG_LIVE(sInterpMode, cfg_int("S3D_MUSYX_INTERP", 0));
-    CFG_LIVE(sGainPct, cfg_int("S3D_MUSYX_GAIN", 100));
-    CFG_LIVE(sStats, cfg_int("S3D_MUSYX_STATS", 0));
-    static u32 statTicks;
-    static int lastInterp = -1, lastGain = -1;
-    if (sInterpMode != lastInterp || sGainPct != lastGain) {
-        if (lastInterp >= 0) LOG_WARN("musyx", "test: interp mode %d, gain %d%%", sInterpMode, sGainPct);
-        lastInterp = sInterpMode;
-        lastGain = sGainPct;
-        for (int i = 0; i < PORT_NDSP_MUSYX_CHANNELS; i++) sHw[i].interp = 0xffff, sHw[i].mix[0] = -1.0f;
-    }
-    if (sStats && ++statTicks >= 1000) {  // 5 s
-        LOG_WARN("musyx", "stats 5s: starts %lu cuts %lu rate %lu interp %lu mix %lu, avg voices %.1f, peak gain %.2f",
-                 (unsigned long)sSt.starts, (unsigned long)sSt.cuts, (unsigned long)sSt.rates,
-                 (unsigned long)sSt.interps, (unsigned long)sSt.mixes, sSt.active / 1000.0f, sSt.peak);
-        memset(&sSt, 0, sizeof(sSt));
-        statTicks = 0;
-    }
     for (u8 st = 0; st < salMaxStudioNum; ++st) {
         DSPstudioinfo* stp = &dspStudio[st];
         if (stp->state != DSP_STUDIO_STATE_ACTIVE) continue;
@@ -525,6 +484,8 @@ void port_musyx_pump_silent(void) {
     run_ticks(due);
     salPCExternalLeave();
 }
+
+#endif  // !PORT_MUSYX_SOFT (port/musyx_soft_3ds.c)
 
 // --- Sample memory: the DSP reads samples from linear memory -------------------------
 
@@ -655,6 +616,7 @@ void aramFreeStreamBuffer(u8 id) {
     }
 }
 
+#ifndef PORT_MUSYX_SOFT
 // Debug log line: voices in use and DSP channels actually playing
 void port_musyx_log_stats(void) {
     u32 voices = 0, channels = 0;
@@ -671,6 +633,7 @@ void port_musyx_log_stats(void) {
               (unsigned long)(ticks ? time * 1000000 / SYSCLOCK_ARM11 / ticks : 0),
               (unsigned long)(sSampleBytes / 1024), (unsigned long)(linearSpaceFree() / 1024));
 }
+#endif
 
 // --- MusyX debugger hooks (foxhollow's debugger UI is not part of the port) ----------
 
@@ -705,6 +668,7 @@ u32 port_musyx_sample_fingerprint(void) {
     return h;
 }
 
+#ifndef PORT_MUSYX_SOFT
 // After game memory was replaced (MusyX lock held): restart the channels of the
 // voices that were playing. Looping sounds start over; one-shots end at the
 // next tick instead of replaying.
@@ -728,3 +692,4 @@ void port_musyx_after_restore(void) {
         }
     }
 }
+#endif

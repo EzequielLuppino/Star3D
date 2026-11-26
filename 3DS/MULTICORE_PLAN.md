@@ -26,7 +26,8 @@ Threads now:
 | Render thread (`gx/gx_rec.c`) | 2 | 0x2E | Replays the recorded GX calls through the unchanged gx/*.c into citro3d |
 | Worker (`port/worker.c`) | 1 | 0x2F | DVD async reads, movie prefetch (was core 2) |
 | Skinning helper (`port/helper.c`) | 1 | 0x2C | Fork-join jobs: skinning chunks |
-| MusyX tick thread (`port/musyx_ndsp.c`) | 1 | 0x18 | MusyX synth ticks, woken by the ndsp frame callback (was inside the ndsp thread on core 0, ~175 us per 5 ms) |
+| MusyX mixer thread (`port/musyx_soft_3ds.c`, default since 2026-11-26) | 3 (else 2, else 0) | 0x18 | MusyX software renderer: synth ticks + mixing of all voices, 20 ms per ndsp buffer, ~6.8 ms average per buffer on hardware |
+| MusyX tick thread (`port/musyx_ndsp.c`, `MUSYX_MIX=dsp` only) | 1 | 0x18 | MusyX synth ticks, woken by the ndsp frame callback (was inside the ndsp thread on core 0, ~175 us per 5 ms) |
 | Audio stream reader (`port/audio_3ds.c`) | 1 | 0x2F | Disc stream chunk reads (was core 0) |
 | ndsp thread, watchdog | 0 | 0x18 | unchanged |
 

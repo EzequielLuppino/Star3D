@@ -62,6 +62,11 @@ void movie_audio_frame(void);  // ndsp frame callback
 void movie_audio_pump(void);   // Once per game frame, after the AI DMA pump
 
 // musyx_ndsp.c
+#include "musyx_mix.h"  // PORT_MUSYX_SOFT (Makefile MUSYX_MIX)
+#ifdef PORT_MUSYX_SOFT
+void port_musyx_configure(void);     // musyx_soft_3ds.c: before sndInit
+void port_musyx_start_output(void);  // after sndInit
+#endif
 void port_musyx_frame(void);        // ndsp frame callback
 void port_musyx_pump_silent(void);  // Once per game frame, drives MusyX when ndsp is unavailable
 void port_musyx_log_stats(void);

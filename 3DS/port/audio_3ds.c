@@ -27,7 +27,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "config.h"
 #include "log.h"
 #include "port_3ds.h"
 #include "profiler.h"
@@ -109,11 +108,17 @@ static void musyx_dma_callback(void) {
 }
 
 void fhMusyxConfigure(void) {
+#ifdef PORT_MUSYX_SOFT
+    port_musyx_configure();
+#endif
     SND_PC_CONFIG config = { 32000, 2 };
     sndPCConfigure(&config);
 }
 
 void fhMusyxStartOutput(void) {
+#ifdef PORT_MUSYX_SOFT
+    port_musyx_start_output();
+#endif
     memset(sMusyxBuffers, 0, sizeof(sMusyxBuffers));
     sMusyxBufferIndex = 1;
     AIRegisterDMACallback(musyx_dma_callback);
@@ -545,20 +550,6 @@ u8 AIGetStreamVolRight(void) { return sStreamVolRight; }
 // Called once per frame from VIWaitForRetrace
 void fhAIPump(void) {
     PROF_ZONE("audio.pump");
-    // Live audio test knobs (cmd.txt): master volume in percent and the DSP's
-    // clipping mode (1 soft, ndsp's default; 0 normal), to tell clipping apart
-    // from other crackle
-    static int masterVol = -1, clipSoft = -1;
-    int vol = masterVol, soft = clipSoft;
-    CFG_LIVE(vol, cfg_int("S3D_AUDIO_MASTER", 100));
-    CFG_LIVE(soft, cfg_int("S3D_AUDIO_SOFTCLIP", 1));
-    if (sNdsp && (vol != masterVol || soft != clipSoft)) {
-        masterVol = vol;
-        clipSoft = soft;
-        ndspSetMasterVol(vol / 100.0f);
-        ndspSetClippingMode(soft ? NDSP_CLIP_SOFT : NDSP_CLIP_NORMAL);
-        LOG_WARN("audio", "test: master volume %d%%, %s clipping", vol, soft ? "soft" : "normal");
-    }
     port_musyx_pump_silent();
     pump_dma();
     stream_pump();
