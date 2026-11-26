@@ -7,7 +7,8 @@
 // S3D_C3D_FAST bitmask, set by gx_render.c at the frame start:
 // 1 draw packet from a template (C3D_DrawElementsFast), one context update
 // 2 uniform upload skips clean words of the dirty flags
-// 4 uniform upload skips values the registers already hold (uniforms.c)
+// 4 uniform upload skips values the registers already hold (uniforms.c);
+//   off by default since bug 46 (stale uniforms on hardware)
 extern int g_c3d_fast;
 // Uniform upload counts since the last read: vec4 uploaded, vec4 skipped,
 // bool writes skipped (uniforms.c, read by gx_render.c)

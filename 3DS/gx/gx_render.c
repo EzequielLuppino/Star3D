@@ -111,7 +111,11 @@ int g_rt_memo = 15;
 static int s_prep_fast = 7;
 // S3D_C3D_FAST (third_party/citro3d/source/s3d_hooks.h): citro3d fast paths,
 // 1 template draw packet, 2 uniform upload skips clean flag words, 4 skips
-// uniform values the GPU registers already hold. Default 7
+// uniform values the GPU registers already hold. Default 3: bit 4 caused bug
+// 46 (on hardware a floor turned white and pine branches vanished for a frame
+// or two, gone with S3D_C3D_FAST=3; the shadow of the uniform registers gets
+// out of step with the GPU somewhere). Its measured gain was a wash: GPU
+// -0.7..-0.9 ms, render thread +0.2..0.3 ms (DRAWCALL_PLAN.md)
 extern int g_c3d_fast;
 extern u32 g_c3d_unif_stats[3];  // citro3d uniforms.c: vec4 uploaded / skipped, bool writes skipped
 static bool s_fog_on = true;      // S3D_FOG
@@ -1038,7 +1042,7 @@ void gx_render_frame_begin(void) {
             s_rt_dedup = cfg_int("S3D_RT_DEDUP", 5);
             g_rt_memo = cfg_int("S3D_RT_MEMO", 15);
             s_prep_fast = cfg_int("S3D_PREP_FAST", 7);
-            g_c3d_fast = cfg_int("S3D_C3D_FAST", 7);
+            g_c3d_fast = cfg_int("S3D_C3D_FAST", 3);
             // S3D_RT_STEPS (A/B S3D_RT_STEPS_AB): the render-thread steps of
             // DRAWCALL_PLAN.md in one switch, -1 = the individual settings.
             // Bits 0-2 = S3D_PREP_FAST, bit 3 = S3D_C3D_FAST bit 4 (uniform value check)

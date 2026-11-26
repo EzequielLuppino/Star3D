@@ -232,6 +232,9 @@ skipped). The user saw nothing odd. Per cycle, all steps on vs off: frame
 - A sampler phase "(table full)" took 0.78 ms: the probe's phase table is
   full, so some phases are lumped together. Raise PHASES next time.
 - Defaults stay on (S3D_PREP_FAST 7, S3D_C3D_FAST 7).
+- **Update 2026-11-26:** `S3D_C3D_FAST` default is now 3 (uniform check off):
+  on hardware it left stale uniforms behind (bug 46, white floor and vanishing
+  pine branches for a frame or two).
 
 ---
 

@@ -53,7 +53,7 @@ void C3D_DrawElements(GPU_Primitive_t primitive, int count, int type, const void
 #include <string.h>
 #include "s3d_hooks.h"
 
-int g_c3d_fast = 7;
+int g_c3d_fast = 3;  // S3D: gx_render.c sets it each frame (bit 4 off by default, bug 46)
 
 #define TPL_IDX_MARK 0xA5A5A5A4u
 #define TPL_CNT_MARK 0x5A5A5A5Au
